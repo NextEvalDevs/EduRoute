@@ -75,6 +75,7 @@ add_library(eduroute_engine STATIC
         ${DIV2_SOURCES}
         ${DIV3_SOURCES}
         src/core/arena.cpp
+        src/core/array.cpp
 )
 
 target_include_directories(eduroute_engine PUBLIC
