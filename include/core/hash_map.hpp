@@ -1,8 +1,5 @@
 #pragma once
 
-#include <bits/unicode.h>
-
-
 #include "core/arena_alloc.hpp"
 #include "core/string_view.hpp"
 #include "core/types.hpp"
