@@ -59,15 +59,31 @@ namespace core {
             uint8_t *buffer_{nullptr};
 
         public:
-            explicit Arena (std::size_t capacity);
-            ~Arena ();
+            Arena (std::size_t capacity) : capacity_ (capacity), offset_ (0) {
+                if (capacity_ > 0) {
+                    buffer_ = static_cast<uint8_t *> (std::malloc (capacity_));
+                    EDU_ASSERT (buffer_ != nullptr, "Failed to allocate memory");
+                }
+            }
+            ~Arena () {
+                if (buffer_) {
+                    std::free (buffer_);
+                    buffer_ = nullptr;
+                }
+                capacity_ = 0;
+                offset_   = 0;
+            }
 
             Arena (const Arena &)            = delete;
             Arena &operator= (const Arena &) = delete;
 
 
-            Arena (Arena &&other) noexcept;
-            Arena &operator= (Arena &&other) noexcept;
+            Arena (Arena &&other) noexcept :
+                capacity_ (other.capacity_), offset_ (other.offset_), buffer_ (other.buffer_) {
+                other.buffer_   = nullptr;
+                other.capacity_ = 0;
+                other.offset_   = 0;
+            }
 
             /**
              * Use this for raw bytes
@@ -75,7 +91,7 @@ namespace core {
              * @param alignment Alignment (ignore if u don't know)
              * @return pointer to the bytes
              */
-            void *allocate (std::size_t size, std::size_t alignment = alignof (std::max_align_t));
+            // void *allocate (std::size_t size, std::size_t alignment = alignof (std::max_align_t));
 
             /**
              * Enforces trivial destruyction (int float etc)
@@ -96,11 +112,40 @@ namespace core {
             };
 
             Marker get_marker () const noexcept { return Marker{offset_}; }
-            void reset_to_marker (Marker marker) noexcept;
+            void reset_to_marker (Marker marker) noexcept {
+                EDU_ASSERT (marker.offset <= offset_, "Cannot rewind");
+                offset_ = marker.offset;
+            }
             void reset () noexcept { offset_ = 0; };
 
-            std::size_t used () const noexcept { return offset_; }
-            std::size_t capacity () const noexcept { return capacity_; }
+            [[nodiscard]] usize used () const noexcept { return offset_; }
+            [[nodiscard]] usize capacity () const noexcept { return capacity_; }
+
+            void *allocate (std::size_t size, std::size_t alignment) {
+                if (size == 0 || buffer_ == nullptr) return nullptr;
+
+                EDU_ASSERT (alignment > 0 && (alignment & (alignment - 1)) == 0, "Alignment must be a power of 2");
+
+                std::uintptr_t caddr        = reinterpret_cast<std::uintptr_t> (buffer_ + offset_);
+                std::uintptr_t aligned_addr = (caddr + (alignment - 1)) & ~(alignment - 1);
+                std::size_t newoffset       = (aligned_addr - reinterpret_cast<std::uintptr_t> (buffer_)) + size;
+                if (newoffset > capacity_) return nullptr;
+                offset_ = newoffset;
+                return reinterpret_cast<void *> (aligned_addr);
+            }
+
+            Arena &operator= (Arena &&other) noexcept {
+                if (this != &other) {
+                    if (buffer_) std::free (buffer_);
+                    buffer_         = other.buffer_;
+                    capacity_       = other.capacity_;
+                    offset_         = other.offset_;
+                    other.buffer_   = nullptr;
+                    other.capacity_ = 0;
+                    other.offset_   = 0;
+                }
+                return *this;
+            }
     };
 
     class ScopedArena {
@@ -118,60 +163,6 @@ namespace core {
     };
 
 
-    Arena::Arena (std::size_t capacity) : capacity_ (capacity), offset_ (0) {
-        if (capacity_ > 0) {
-            buffer_ = static_cast<uint8_t *> (std::malloc (capacity_));
-            EDU_ASSERT (buffer_ != nullptr, "Failed to allocate memory");
-        }
-    }
-
-    Arena::~Arena () {
-        if (buffer_) {
-            std::free (buffer_);
-            buffer_ = nullptr;
-        }
-        capacity_ = 0;
-        offset_   = 0;
-    }
-
-    Arena::Arena (Arena &&other) noexcept :
-        capacity_ (other.capacity_), offset_ (other.offset_), buffer_ (other.buffer_) {
-        other.buffer_   = nullptr;
-        other.capacity_ = 0;
-        other.offset_   = 0;
-    }
-
-    void *Arena::allocate (std::size_t size, std::size_t alignment) {
-        if (size == 0 || buffer_ == nullptr) return nullptr;
-
-        EDU_ASSERT (alignment > 0 && (alignment & (alignment - 1)) == 0, "Alignment must be a power of 2");
-
-        std::uintptr_t caddr        = reinterpret_cast<std::uintptr_t> (buffer_ + offset_);
-        std::uintptr_t aligned_addr = (caddr + (alignment - 1)) & ~(alignment - 1);
-        std::size_t newoffset       = (aligned_addr - reinterpret_cast<std::uintptr_t> (buffer_)) + size;
-        if (newoffset > capacity_) return nullptr;
-        offset_ = newoffset;
-        return reinterpret_cast<void *> (aligned_addr);
-    }
-
-
-    Arena &Arena::operator= (Arena &&other) noexcept {
-        if (this != &other) {
-            if (buffer_) std::free (buffer_);
-            buffer_         = other.buffer_;
-            capacity_       = other.capacity_;
-            offset_         = other.offset_;
-            other.buffer_   = nullptr;
-            other.capacity_ = 0;
-            other.offset_   = 0;
-        }
-        return *this;
-    }
-
-    void Arena::reset_to_marker (Arena::Marker marker) noexcept {
-        EDU_ASSERT (marker.offset <= offset_, "Cannot rewind");
-        offset_ = marker.offset;
-    }
 } // namespace core
 
 

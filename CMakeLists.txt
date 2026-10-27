@@ -74,8 +74,7 @@ add_library(eduroute_engine STATIC
         ${DIV1_SOURCES}
         ${DIV2_SOURCES}
         ${DIV3_SOURCES}
-        src/core/arena.cpp
-        src/core/array.cpp
+        include/anticheat/kmer_winnow.hpp
 )
 
 target_include_directories(eduroute_engine PUBLIC
@@ -84,6 +83,7 @@ target_include_directories(eduroute_engine PUBLIC
 
 add_library(eduroute SHARED
         src/eduroute_c_api.cpp
+        include/anticheat/kmer_winnow.hpp
 )
 
 target_link_libraries(eduroute PRIVATE eduroute_engine)
@@ -92,8 +92,10 @@ set_target_properties(eduroute PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dashboard"
 )
 
-add_executable(stress_sim sim/stress_sim.cpp)
+add_executable(stress_sim sim/stress_sim.cpp
+        include/anticheat/kmer_winnow.hpp)
 target_link_libraries(stress_sim PRIVATE eduroute_engine)
 
-add_executable(test_adts sim/test_adts.cpp)
+add_executable(test_adts sim/test_adts.cpp
+        include/anticheat/kmer_winnow.hpp)
 target_link_libraries(test_adts PRIVATE eduroute_engine)
