@@ -1,4 +1,6 @@
 #include <iostream>
+
+#include "anticheat/kmer_winnow.hpp"
 #include "core/dyn_array.hpp"
 
 #include "core/hash_map.hpp"
@@ -27,4 +29,8 @@ int main () {
 
     map[7] = "f";
     std::cout << map[1] << std::endl;
+
+
+    Arena arena2 (99999998);
+    anticheat::KmerWinnow kkkk (arena2);
 }
