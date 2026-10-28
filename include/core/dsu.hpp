@@ -5,9 +5,6 @@
 #include <cassert>
 #include "core/types.hpp"
 
-#include "dyn_array.hpp"
-
-
 namespace core {
     class DisjointSet {
         private:
