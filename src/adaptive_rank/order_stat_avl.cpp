@@ -1,6 +1,6 @@
 #include "adaptive_rank/order_stat_avl.hpp"
 
-namespace adaptive_rank {
+namespace core::adaptive_rank {
 
     using namespace core;
 
