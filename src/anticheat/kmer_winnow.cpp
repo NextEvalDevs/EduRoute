@@ -87,11 +87,12 @@ namespace core::anticheat {
                     }
 
                     u32 *cpt = hit_cnts.find (curr->student_id);
-                    if (cpt != NULL) {
+                    if (cpt == nullptr) {
                         hit_cnts.insert (curr->student_id, 1u);
                         matched_students.push_back (curr->student_id);
-                    } else
+                    } else {
                         ++(*cpt);
+                    }
                 }
             }
 
@@ -105,10 +106,11 @@ namespace core::anticheat {
 
         for (const auto &x: matched_students) {
             const StudentId otsid = x;
-            const u32 shared      = *hit_cnts.find (otsid);
+            const u32 *shared_ptr = hit_cnts.find (otsid);
+            const u32 shared      = shared_ptr ? *shared_ptr : 0u;
             if (shared < 2) continue;
 
-            const u32 *otttpr = doc_fp_c_.find (make_student_q_key (sid, otsid));
+            const u32 *otttpr = doc_fp_c_.find (make_student_q_key (qid, otsid));
             const u32 ottt    = otttpr ? *otttpr : shared;
             const u32 demon   = min (my_fp_cnt, ottt);
 

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}EduRoute Engine{% endblock %}</title>
+    <style>
+        /* Lightweight, low-bandwidth CSS for old devices & 2G connections */
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.4;
+            color: #111;
+            background-color: #f7f7f7;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background: #1e3a8a;
+            color: white;
+            padding: 10px 16px;
+            border-bottom: 2px solid #172554;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            display: inline-block;
+        }
+        nav {
+            margin-top: 6px;
+        }
+        nav a {
+            color: #dbeafe;
+            text-decoration: none;
+            margin-right: 14px;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        nav a:hover, nav a.active {
+            color: #ffffff;
+            text-decoration: underline;
+        }
+        .container {
+            max-width: 900px;
+            margin: 12px auto;
+            padding: 0 12px;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            padding: 14px;
+            margin-bottom: 14px;
+        }
+        h2, h3 { margin-top: 0; color: #1e293b; }
+        h2 { font-size: 1.15rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+        h3 { font-size: 1.0rem; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+            margin-top: 8px;
+        }
+        th, td {
+            border: 1px solid #cbd5e1;
+            padding: 6px 8px;
+            text-align: left;
+        }
+        th {
+            background: #f1f5f9;
+            color: #334155;
+            font-weight: 600;
+        }
+        tr:nth-child(even) { background: #f8fafc; }
+        .btn {
+            display: inline-block;
+            background: #2563eb;
+            color: white;
+            padding: 7px 14px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .btn:hover { background: #1d4ed8; }
+        .btn-danger { background: #dc2626; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-sm { padding: 4px 8px; font-size: 0.8rem; }
+        input[type="text"], input[type="number"], textarea, select {
+            width: 100%;
+            padding: 7px;
+            border: 1px solid #94a3b8;
+            border-radius: 3px;
+            font-size: 0.95rem;
+            margin-top: 4px;
+            margin-bottom: 10px;
+        }
+        .radio-opt {
+            display: block;
+            margin: 8px 0;
+            padding: 8px 10px;
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .radio-opt:hover { background: #eff6ff; }
+        .radio-opt input { margin-right: 8px; }
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+        .badge-green { background: #dcfce7; color: #15803d; }
+        .badge-red { background: #fee2e2; color: #b91c1c; border: 1px solid #f87171; }
+        .badge-blue { background: #e0e7ff; color: #3730a3; }
+        .badge-yellow { background: #fef9c3; color: #854d0e; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .stat-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 10px;
+            text-align: center;
+        }
+        .stat-val { font-size: 1.3rem; font-weight: bold; color: #1e3a8a; }
+        .stat-lbl { font-size: 0.75rem; color: #64748b; text-transform: uppercase; }
+        .alert {
+            padding: 10px 14px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            font-size: 0.9rem;
+        }
+        .alert-warning { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; }
+        .alert-info { background: #e0f2fe; border: 1px solid #38bdf8; color: #0369a1; }
+        .alert-success { background: #dcfce7; border: 1px solid #4ade80; color: #166534; }
+        footer {
+            text-align: center;
+            padding: 14px;
+            font-size: 0.8rem;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+            margin-top: 20px;
+        }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header>
+        <h1>EduRoute Adaptive Exam & Anticheat Engine</h1>
+        <nav>
+            <a href="/">Home</a>
+            <a href="/exam">Student Exam</a>
+            <a href="/dashboard">Teacher Dashboard</a>
+            <a href="/questions">Question Bank</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+
+    <footer>
+        EduRoute C++ Engine ABI | No STL Backend | Fenwick BIT & Order-Stat AVL | Rabin-Karp & DSU Collusion Graph
+    </footer>
+</body>
+</html>

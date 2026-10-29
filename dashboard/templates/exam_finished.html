@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}EduRoute - Exam Completed{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center; padding: 24px;">
+    <h2>Exam Completed!</h2>
+    <p style="color: #475569; font-size: 0.95rem;">
+        Congratulations Student #{{ student_id }}, your adaptive test session has been completed and graded by the IRT Engine.
+    </p>
+
+    <div class="stats-grid" style="margin: 20px auto; max-width: 600px;">
+        <div class="stat-box">
+            <div class="stat-val" style="color: #2563eb;">{{ current_score }}</div>
+            <div class="stat-lbl">Final Scaled Score</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val" style="color: #0f766e;">#{{ live_rank }}</div>
+            <div class="stat-lbl">Final Live Rank</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val" style="color: #7c3aed;">{{ live_percentile }}%</div>
+            <div class="stat-lbl">Fenwick Percentile</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ updated_theta }}</div>
+            <div class="stat-lbl">Estimated Ability (θ)</div>
+        </div>
+    </div>
+
+    {% if is_flagged %}
+    <div class="alert alert-warning" style="max-width: 600px; margin: 0 auto 16px auto; text-align: left;">
+        <strong>Notice from Proctor:</strong> Your session was linked to a statistical or text collusion cluster by the backend anticheat engine (DSU Root #{{ cluster_root_id }}).
+    </div>
+    {% endif %}
+
+    <div style="margin-top: 20px;">
+        <a href="/dashboard" class="btn" style="background: #0f766e; margin-right: 10px;">View Full Leaderboard</a>
+        <a href="/" class="btn">Return to Home</a>
+    </div>
+</div>
+{% endblock %}

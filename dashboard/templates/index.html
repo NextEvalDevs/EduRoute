@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}EduRoute - Welcome{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Welcome to EduRoute</h2>
+    <p>
+        A high-performance, low-latency adaptive examination and real-time anti-cheat platform.
+        Built with a pure C++ No-STL core connected directly to this lightweight interface via the C ABI.
+    </p>
+
+    <div class="stats-grid" style="margin-top: 14px;">
+        <div class="stat-box">
+            <div class="stat-val">{{ bank_size }}</div>
+            <div class="stat-lbl">Questions in Bank</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ top_students|length }}</div>
+            <div class="stat-lbl">Active Students</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ confirmed_edges|length }}</div>
+            <div class="stat-lbl">Collusion Flags</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ mem.used_kb }} KB</div>
+            <div class="stat-lbl">C++ Arena Memory</div>
+        </div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+    <!-- Student Join Box -->
+    <div class="card">
+        <h2>Student Exam Portal</h2>
+        <p style="font-size: 0.9rem; color: #475569;">
+            Enter your Student ID to start or resume your adaptive examination.
+            Questions will be dynamically routed according to your Item Response Theory (IRT) ability rating.
+        </p>
+
+        <form action="/exam" method="GET">
+            <label for="student_id" style="font-weight: 600; font-size: 0.9rem;">Student ID (0 - 499):</label>
+            <input type="number" id="student_id" name="student_id" min="0" max="499" value="1" required>
+
+            <button type="submit" class="btn" style="width: 100%;">Begin / Resume Exam &rarr;</button>
+        </form>
+    </div>
+
+    <!-- Teacher Dashboard Box -->
+    <div class="card">
+        <h2>Teacher & Proctor Dashboard</h2>
+        <p style="font-size: 0.9rem; color: #475569;">
+            Real-time monitoring of live student ranks, percentiles, statistical Δt anomaly spikes,
+            K-mer winnowed text collusion, and DSU cheating rings.
+        </p>
+
+        <div style="margin-top: 20px;">
+            <a href="/dashboard" class="btn" style="background: #0f766e; width: 100%; text-align: center; box-sizing: border-box;">Open Live Dashboard &rarr;</a>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Architecture & Engine Status</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Component</th>
+                <th>Underlying Data Structure</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Div 1: Sync & WAL</strong></td>
+                <td>Append-Only Binary WAL Ring + FNV-1a Hash Chain</td>
+                <td><span class="badge badge-green">Active (Zero-Loss)</span></td>
+            </tr>
+            <tr>
+                <td><strong>Div 2: Anti-Cheat</strong></td>
+                <td>Rabin-Karp Rolling Hash + Inverted Index + DSU Cluster Graph</td>
+                <td><span class="badge badge-green">Online & Monitoring</span></td>
+            </tr>
+            <tr>
+                <td><strong>Div 3: Adaptive IRT</strong></td>
+                <td>1PL Fisher Information Routing + Fenwick Tree + Order-Stat AVL</td>
+                <td><span class="badge badge-green">Active (O(log N))</span></td>
+            </tr>
+            <tr>
+                <td><strong>Memory Subsystem</strong></td>
+                <td>Custom Bump Arena Allocator (Zero STL)</td>
+                <td><span class="badge badge-blue">{{ mem.used_bytes }} Bytes Used</span></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}
