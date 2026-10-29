@@ -3,7 +3,7 @@
 #include "core/arena_alloc.hpp"
 #include "core/types.hpp"
 
-namespace adaptive_rank {
+namespace core::adaptive_rank {
 
     /**
      * OrderStatAvl - exact leaderboard. A self-balancing binary search tree (AVL) in which every
