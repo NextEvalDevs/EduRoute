@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}EduRoute - Question Bank{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h2>Question Bank (Registered in C++ Engine)</h2>
+            <span style="font-size: 0.85rem; color: #64748b;">
+                Calibrated questions available for adaptive Item Response Theory (IRT) selection.
+            </span>
+        </div>
+        <span class="badge badge-blue">{{ questions|length }} Questions Loaded</span>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Topic</th>
+                <th>Type</th>
+                <th>Difficulty (Beta)</th>
+                <th>Expected Time</th>
+                <th>Prompt</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for q in questions %}
+            <tr>
+                <td><strong>#{{ q.id }}</strong></td>
+                <td><span class="badge badge-yellow">{{ topics[q.topic_id] }}</span></td>
+                <td>{{ q.type|upper }}</td>
+                <td>{{ q.difficulty_beta }}</td>
+                <td>{{ q.expected_time_ms // 1000 }}s</td>
+                <td>{{ q.prompt }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

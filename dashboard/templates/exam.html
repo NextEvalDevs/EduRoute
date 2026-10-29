@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}EduRoute - Exam (Student #{{ student_id }}){% endblock %}
+
+{% block content %}
+<div class="card" style="background: #f8fafc; border-left: 4px solid #2563eb;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <div>
+            <h2 style="margin: 0; border: none; padding: 0;">Student #{{ student_id }} Exam Session</h2>
+            <span style="font-size: 0.85rem; color: #64748b;">Adaptive IRT Question Selection Active</span>
+        </div>
+        <div>
+            {% if is_flagged %}
+                <span class="badge badge-red" title="Cheating ring detected by backend DSU">FLAGGED BY ANTICHEAT</span>
+            {% else %}
+                <span class="badge badge-green">STATUS: NORMAL</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Student Live Metrics Grid -->
+    <div class="stats-grid" style="margin-top: 10px;">
+        <div class="stat-box">
+            <div class="stat-val">{{ current_score }}</div>
+            <div class="stat-lbl">Scaled Score (0-10000)</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">#{{ live_rank }}</div>
+            <div class="stat-lbl">AVL Exact Rank</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ live_percentile }}%</div>
+            <div class="stat-lbl">Fenwick Percentile</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ updated_theta }}</div>
+            <div class="stat-lbl">IRT Ability (θ)</div>
+        </div>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-warning">
+    <strong>Notice:</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="badge badge-blue">Question #{{ question.id }}</span>
+        <span style="font-size: 0.8rem; color: #64748b;">
+            Topic: <strong>{{ topic_name }}</strong> | Difficulty Beta: <strong>{{ question.difficulty_beta }}</strong>
+        </span>
+    </div>
+
+    <h3 style="font-size: 1.1rem; line-height: 1.5; color: #0f172a; margin-bottom: 16px;">
+        {{ question.prompt }}
+    </h3>
+
+    <form action="/exam/submit" method="POST" id="examForm">
+        <input type="hidden" name="student_id" value="{{ student_id }}">
+        <input type="hidden" name="question_id" value="{{ question.id }}">
+        <input type="hidden" name="question_type" value="{{ question.type }}">
+        <input type="hidden" id="monotonic_dt_ms" name="monotonic_dt_ms" value="5000">
+
+        {% if question.type == "mcq" %}
+            <p style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">Select the best option:</p>
+            {% for opt in question.options %}
+            <label class="radio-opt">
+                <input type="radio" name="mcq_option" value="{{ loop.index0 }}" required>
+                <strong>{{ ['A', 'B', 'C', 'D'][loop.index0] }}.</strong> {{ opt }}
+            </label>
+            {% endfor %}
+        {% else %}
+            <label for="full_text" style="font-weight: 600; font-size: 0.9rem;">Your Detailed Answer (Text):</label>
+            <textarea id="full_text" name="full_text" rows="6" placeholder="Type your answer here. Submissions are checked for k-mer similarity and plagiarism..." required></textarea>
+        {% endif %}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+            <span style="font-size: 0.8rem; color: #64748b;">
+                Time on question: <span id="timerDisplay">0s</span>
+            </span>
+            <button type="submit" class="btn" id="submitBtn">Submit Answer & Continue &rarr;</button>
+        </div>
+    </form>
+</div>
+
+<script>
+    // Lightweight monotonic stopwatch for low-end browsers
+    (function() {
+        var startTime = Date.now();
+        var timerDisplay = document.getElementById("timerDisplay");
+        var dtInput = document.getElementById("monotonic_dt_ms");
+        
+        var interval = setInterval(function() {
+            var elapsed = Date.now() - startTime;
+            dtInput.value = elapsed;
+            if (timerDisplay) {
+                timerDisplay.textContent = Math.floor(elapsed / 1000) + "s";
+            }
+        }, 1000);
+
+        var form = document.getElementById("examForm");
+        if (form) {
+            form.addEventListener("submit", function() {
+                clearInterval(interval);
+                var totalElapsed = Date.now() - startTime;
+                dtInput.value = totalElapsed;
+                document.getElementById("submitBtn").disabled = true;
+                document.getElementById("submitBtn").textContent = "Submitting to C++ Engine...";
+            });
+        }
+    })();
+</script>
+{% endblock %}

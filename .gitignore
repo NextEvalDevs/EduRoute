@@ -4,4 +4,6 @@
 /cmake-build-debug
 /.idk
 .aicont
-/dashboard
+/dashboard/libeduroute.so
+/dashboard/eduroute_wal.bin
+**/__pycache__/

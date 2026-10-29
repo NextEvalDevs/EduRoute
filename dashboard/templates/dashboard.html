@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}EduRoute - Proctor & Teacher Dashboard{% endblock %}
+
+{% block head %}
+{% if auto_refresh %}
+<meta http-equiv="refresh" content="5">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+    <div>
+        <h2 style="margin: 0; border: none; padding: 0;">Live Examination Dashboard</h2>
+        <span style="font-size: 0.85rem; color: #64748b;">Live C++ Backend Engine Metrics</span>
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center;">
+        {% if auto_refresh %}
+            <a href="/dashboard?auto=0" class="btn btn-sm" style="background: #475569;">Pause Auto-Refresh (5s)</a>
+        {% else %}
+            <a href="/dashboard?auto=1" class="btn btn-sm" style="background: #0f766e;">Enable Auto-Refresh (5s)</a>
+        {% endif %}
+        <a href="/dashboard" class="btn btn-sm">Refresh Now</a>
+    </div>
+</div>
+
+<!-- Telemetry Summary Cards -->
+<div class="stats-grid">
+    <div class="stat-box">
+        <div class="stat-val">{{ leaderboard|length }}</div>
+        <div class="stat-lbl">Ranked Students</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-val" style="color: {% if edges|length > 0 %}#dc2626{% else %}#15803d{% endif %};">
+            {{ edges|length }}
+        </div>
+        <div class="stat-lbl">Confirmed Collusions</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-val">{{ mem.used_kb }} KB</div>
+        <div class="stat-lbl">Arena Memory Used</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-val">{{ bank_size }}</div>
+        <div class="stat-lbl">Questions in Bank</div>
+    </div>
+</div>
+
+<!-- Simulation / Demonstration Panel -->
+<div class="card" style="background: #fdf2f8; border-color: #fbcfe8;">
+    <h3 style="margin-top: 0; color: #9d174d;">Interactive Engine Demonstrator</h3>
+    <p style="font-size: 0.85rem; color: #701a75; margin-bottom: 10px;">
+        Use these quick buttons to simulate incoming wire packets and test the C++ ABI in real-time:
+    </p>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <form action="/api/simulate_collusion" method="POST" style="margin: 0;">
+            <button type="submit" class="btn btn-sm btn-danger">Simulate Cheating Ring (Students #10 & #11)</button>
+        </form>
+        <form action="/api/simulate_students" method="POST" style="margin: 0;">
+            <button type="submit" class="btn btn-sm" style="background: #2563eb;">Simulate 5 Random Legitimate Students</button>
+        </form>
+    </div>
+</div>
+
+<!-- Collusion & Cheating Detection Section -->
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>Div 2: Anti-Cheat & Collusion Network (DSU)</h2>
+        {% if edges|length > 0 %}
+            <span class="badge badge-red">{{ edges|length }} Collusion Edge(s) Detected</span>
+        {% else %}
+            <span class="badge badge-green">No Cheating Rings Detected</span>
+        {% endif %}
+    </div>
+
+    {% if edges|length > 0 %}
+    <div class="alert alert-warning" style="margin-top: 8px;">
+        <strong>Warning:</strong> One or more pairs of students exceeded the collusion threshold (W &ge; 3.0) and were merged into Disjoint Set Union (DSU) cheating clusters.
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Pair (A &harr; B)</th>
+                <th>DSU Cluster Root</th>
+                <th>Combined Weight W(A,B)</th>
+                <th>Peak Text Sim (k-mer)</th>
+                <th>Time Sync Score</th>
+                <th>Rare Error Score</th>
+                <th>Collisions</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in edges %}
+            <tr>
+                <td><strong>Student #{{ e.student_a }} &harr; Student #{{ e.student_b }}</strong></td>
+                <td><span class="badge badge-red">Cluster #{{ e.cluster_root }}</span></td>
+                <td><strong>{{ e.combined_weight }}</strong> / 3.0</td>
+                <td>{{ e.peak_text_sim }}</td>
+                <td>{{ e.accum_time_score }}</td>
+                <td>{{ e.accum_err_score }}</td>
+                <td>{{ e.collision_count }}</td>
+                <td><span class="badge badge-red">Flagged</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="font-size: 0.9rem; color: #64748b; margin-top: 8px;">
+        The statistical anomaly detector (Δt-sync spikes, shared rare errors) and K-mer winnowing engine have not detected any suspicious collusion rings yet.
+    </p>
+    {% endif %}
+</div>
+
+<!-- Live Leaderboard Section -->
+<div class="card">
+    <h2>Div 3: Live Tie-Broken Leaderboard (Order-Statistic AVL + Fenwick)</h2>
+    <p style="font-size: 0.85rem; color: #64748b;">
+        Rank is tie-broken in O(log N) by AVL Tree (Score &darr;, Time Taken &uarr;, Student ID &uarr;). Percentiles are calculated in O(log M) via Fenwick Tree.
+    </p>
+
+    {% if leaderboard|length > 0 %}
+    <table>
+        <thead>
+            <tr>
+                <th>Rank</th>
+                <th>Student ID</th>
+                <th>Scaled Score (0-10000)</th>
+                <th>Total Monotonic Time</th>
+                <th>Fenwick Percentile</th>
+                <th>IRT Ability (θ)</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in leaderboard %}
+            <tr style="{% if row.is_flagged %}background: #fef2f2;{% endif %}">
+                <td><strong>#{{ row.rank }}</strong></td>
+                <td>Student #{{ row.student_id }}</td>
+                <td><strong>{{ row.scaled_score }}</strong></td>
+                <td>{{ row.total_time_s }}s</td>
+                <td>{{ row.percentile }}%</td>
+                <td>{{ row.theta_ability }}</td>
+                <td>
+                    {% if row.is_flagged %}
+                        <span class="badge badge-red">Cheating Flag</span>
+                    {% else %}
+                        <span class="badge badge-green">Valid</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="font-size: 0.9rem; color: #64748b; margin-top: 8px;">
+        No students have submitted graded answers yet. Start an exam from the <a href="/exam">Student Exam Portal</a> or use the simulator above.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}
