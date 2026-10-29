@@ -325,9 +325,8 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
 
     // ---- 5. Ensure the student has an active ExamSession -------------------
     if (st.session == nullptr && engine->question_bank.ready () && engine->question_bank.size () > 0u) {
-        // Allocate an ExamSession in the persistent arena.
-        const core::usize sess_bytes = adaptive_rank::ExamSession::required_bytes (engine->question_bank.size (), 20u);
-        void *sess_mem               = engine->pers_arena.allocate (sess_bytes, alignof (adaptive_rank::ExamSession));
+        // Allocate the ExamSession object in the persistent arena.
+        void *sess_mem = engine->pers_arena.allocate (sizeof (adaptive_rank::ExamSession), alignof (adaptive_rank::ExamSession));
         if (sess_mem) {
             auto *sess = ::new (sess_mem) adaptive_rank::ExamSession ();
             adaptive_rank::SelectorConfig cfg{};

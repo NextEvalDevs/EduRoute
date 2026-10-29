@@ -74,6 +74,7 @@ add_library(eduroute_engine STATIC
         ${DIV1_SOURCES}
         ${DIV2_SOURCES}
         ${DIV3_SOURCES}
+        src/eduroute_c_api.cpp
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
         include/eduroute_c_api.h
