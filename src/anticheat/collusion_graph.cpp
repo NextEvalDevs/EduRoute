@@ -6,17 +6,22 @@ namespace core::anticheat {
     // init / clear
     // =========================================================================
 
-    StatusCode CollusionGraph::init (Arena &arena, u32 max_students,
-                                     usize max_edges) noexcept {
+    StatusCode CollusionGraph::init (Arena &arena, u32 max_students, usize max_edges) noexcept {
         if (max_students == 0u) return StatusCode::InvalidState;
 
         const Arena::Marker mark = arena.get_marker ();
 
         edge_map_ = arena.create<HashMap<u64, EdgeData>> (arena, max_edges);
-        if (!edge_map_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!edge_map_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         dsu_ = arena.create<DisjointSet> (arena, max_students);
-        if (!dsu_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!dsu_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         ready_ = true;
         return StatusCode::Ok;
@@ -31,19 +36,13 @@ namespace core::anticheat {
     // Internal: recompute_and_check
     // =========================================================================
 
-    void CollusionGraph::recompute_and_check (StudentId a, StudentId b,
-                                               EdgeData &ed,
-                                               bool &flagged_out) noexcept {
-        ed.combined_weight = W_TEXT * ed.peak_text_sim
-                           + W_TIME * ed.accum_time_score
-                           + W_ERR  * ed.accum_err_score;
+    void CollusionGraph::recompute_and_check (StudentId a, StudentId b, EdgeData &ed, bool &flagged_out) noexcept {
+        ed.combined_weight = W_TEXT * ed.peak_text_sim + W_TIME * ed.accum_time_score + W_ERR * ed.accum_err_score;
 
         if (!ed.confirmed && ed.combined_weight >= COLLUSION_THRESHOLD) {
             ed.confirmed = true;
             // Merge in DSU if both IDs are within range.
-            if (a < dsu_->size () && b < dsu_->size ()) {
-                dsu_->join (a, b);
-            }
+            if (a < dsu_->size () && b < dsu_->size ()) { dsu_->join (a, b); }
         }
 
         flagged_out = ed.confirmed;
@@ -53,12 +52,14 @@ namespace core::anticheat {
     // update_text
     // =========================================================================
 
-    void CollusionGraph::update_text (StudentId a, StudentId b, f32 text_sim,
-                                      bool &flagged_out) noexcept {
-        if (!ready_) { flagged_out = false; return; }
+    void CollusionGraph::update_text (StudentId a, StudentId b, f32 text_sim, bool &flagged_out) noexcept {
+        if (!ready_) {
+            flagged_out = false;
+            return;
+        }
 
-        const u64  key    = edge_key (a, b);
-        EdgeData  *ed     = edge_map_->find (key);
+        const u64 key = edge_key (a, b);
+        EdgeData *ed  = edge_map_->find (key);
         if (ed == nullptr) {
             EdgeData fresh{};
             edge_map_->insert (key, fresh);
@@ -79,13 +80,15 @@ namespace core::anticheat {
     // update_stat
     // =========================================================================
 
-    void CollusionGraph::update_stat (StudentId a, StudentId b,
-                                      f32 time_delta, f32 err_delta,
+    void CollusionGraph::update_stat (StudentId a, StudentId b, f32 time_delta, f32 err_delta,
                                       bool &flagged_out) noexcept {
-        if (!ready_) { flagged_out = false; return; }
+        if (!ready_) {
+            flagged_out = false;
+            return;
+        }
 
-        const u64  key = edge_key (a, b);
-        EdgeData  *ed  = edge_map_->find (key);
+        const u64 key = edge_key (a, b);
+        EdgeData *ed  = edge_map_->find (key);
         if (ed == nullptr) {
             EdgeData fresh{};
             edge_map_->insert (key, fresh);
@@ -94,7 +97,7 @@ namespace core::anticheat {
 
         if (ed != nullptr) {
             ed->accum_time_score += time_delta;
-            ed->accum_err_score  += err_delta;
+            ed->accum_err_score += err_delta;
             if (ed->collision_count < 0xFFFFu) ++ed->collision_count;
             recompute_and_check (a, b, *ed, flagged_out);
         } else {
@@ -121,11 +124,10 @@ namespace core::anticheat {
         return dsu_->component_size (dsu_->find (sid));
     }
 
-    bool CollusionGraph::get_edge (StudentId a, StudentId b,
-                                   CollusionEdge *out) const noexcept {
+    bool CollusionGraph::get_edge (StudentId a, StudentId b, CollusionEdge *out) const noexcept {
         if (!ready_ || out == nullptr) return false;
-        const u64        key = edge_key (a, b);
-        const EdgeData  *ed  = edge_map_->find (key);
+        const u64 key      = edge_key (a, b);
+        const EdgeData *ed = edge_map_->find (key);
         if (ed == nullptr) return false;
 
         const StudentId lo = (a < b) ? a : b;
@@ -142,8 +144,7 @@ namespace core::anticheat {
         return true;
     }
 
-    usize CollusionGraph::get_confirmed_edges (CollusionEdge *out,
-                                               usize max_edges) const noexcept {
+    usize CollusionGraph::get_confirmed_edges (CollusionEdge *out, usize max_edges) const noexcept {
         if (!ready_ || out == nullptr || max_edges == 0u) return 0u;
 
         // We iterate over the internal slot array of the HashMap to collect
@@ -179,9 +180,9 @@ namespace core::anticheat {
         // internal Slot layout matches.
 
         struct MirrorSlot {
-            u64      key;
-            EdgeData val;
-            u32      psl;
+                u64 key;
+                EdgeData val;
+                u32 psl;
         };
 
         // Fetch raw pointer to slots via offset arithmetic from the HashMap
@@ -195,8 +196,8 @@ namespace core::anticheat {
         //   [8]  Slot *slots_      -> 8 bytes
         //   [16] usize capacity_   -> 8 bytes
         //   [24] usize size_       -> 8 bytes
-        const MirrorSlot *slots    = *reinterpret_cast<const MirrorSlot * const *> (raw + 8u);
-        const usize       capacity = *reinterpret_cast<const usize *>             (raw + 16u);
+        const MirrorSlot *slots = *reinterpret_cast<const MirrorSlot *const *> (raw + 8u);
+        const usize capacity    = *reinterpret_cast<const usize *> (raw + 16u);
 
         if (slots == nullptr) return 0u;
 
@@ -205,7 +206,7 @@ namespace core::anticheat {
             const EdgeData &ed = slots[i].val;
             if (!ed.confirmed) continue;
 
-            const u64       k  = slots[i].key;
+            const u64 k        = slots[i].key;
             const StudentId lo = static_cast<StudentId> (k >> 32u);
             const StudentId hi = static_cast<StudentId> (k & 0xFFFFFFFFu);
 
