@@ -1,12 +1,9 @@
 #pragma once
 
 #include "core/arena_alloc.hpp"
-#include "core/dyn_array.hpp
+#include "core/dyn_array.hpp"
 #include <cassert>
 #include "core/types.hpp"
-
-#include "dyn_array.hpp"
-
 
 namespace core {
     class DisjointSet {

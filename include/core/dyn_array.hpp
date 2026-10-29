@@ -1,5 +1,4 @@
-#ifndef CORE_DYN_ARRAY_HPP_
-#define CORE_DYN_ARRAY_HPP_
+#pragma  once
 #include <cassert>
 #include <cstddef>
 #include <cstring>
@@ -117,4 +116,3 @@ namespace core {
 } // namespace core
 
 
-#endif
