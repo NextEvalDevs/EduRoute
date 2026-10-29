@@ -28,7 +28,7 @@ namespace adaptive_rank {
         public:
             static constexpr core::u32 kBuckets = core::MAX_SCORE_BUCKET + 1U;
 
-            FenwickScore () = default;
+            FenwickScore ()                                = default;
             FenwickScore (const FenwickScore &)            = delete;
             FenwickScore &operator= (const FenwickScore &) = delete;
 

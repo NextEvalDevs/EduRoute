@@ -61,15 +61,12 @@ namespace adaptive_rank {
     // ------------------------------------------------------------------------------------------
     // Question + bank
     // ------------------------------------------------------------------------------------------
-    constexpr core::f64 kMinTheta        = -4.0;
-    constexpr core::f64 kMaxTheta        = 4.0;
+    constexpr core::f64 kMinTheta          = -4.0;
+    constexpr core::f64 kMaxTheta          = 4.0;
     constexpr core::f64 kMaxDiscrimination = 4.0;
-    constexpr core::u32 kTierCount       = static_cast<core::u32> (core::DifficultyTier::Count); // 5
+    constexpr core::u32 kTierCount         = static_cast<core::u32> (core::DifficultyTier::Count); // 5
 
-    enum class QuestionType : core::u8 {
-        MCQ,
-        DESCRIPTIVE
-    };
+    enum class QuestionType : core::u8 { MCQ, DESCRIPTIVE };
 
     struct Question {
             core::f32 difficulty;     // b, in [-4, 4]
@@ -92,7 +89,7 @@ namespace adaptive_rank {
 
     class QuestionBank {
         public:
-            QuestionBank () = default;
+            QuestionBank ()                                = default;
             QuestionBank (const QuestionBank &)            = delete;
             QuestionBank &operator= (const QuestionBank &) = delete;
 
@@ -110,8 +107,10 @@ namespace adaptive_rank {
             [[nodiscard]] core::StatusCode add_calibrated (core::QuestionId id, core::TopicId topic,
                                                            core::f64 difficulty, core::u8 correct_option,
                                                            core::f64 discrimination = 1.0) noexcept;
-            [[nodiscard]] core::StatusCode add_descriptive (core::QuestionId id, core::TopicId topic, core::DifficultyTier tier) noexcept;
-            [[nodiscard]] core::StatusCode add_descriptive_calibrated(core::QuestionId id, core::TopicId topic, core::f64 difficulty) noexcept;
+            [[nodiscard]] core::StatusCode add_descriptive (core::QuestionId id, core::TopicId topic,
+                                                            core::DifficultyTier tier) noexcept;
+            [[nodiscard]] core::StatusCode add_descriptive_calibrated (core::QuestionId id, core::TopicId topic,
+                                                                       core::f64 difficulty) noexcept;
             [[nodiscard]] const Question *find (core::QuestionId id) const noexcept;
             /// Index (0..size-1) of a question id, or kNoIndex.
             [[nodiscard]] core::u32 index_of (core::QuestionId id) const noexcept;
@@ -138,20 +137,20 @@ namespace adaptive_rank {
     // Adaptive exam for one student
     // ------------------------------------------------------------------------------------------
     struct SelectorConfig {
-            core::u32 max_questions  = 20;   // hard cap on questions asked (also capped by bank size)
-            core::u32 min_questions  = 5;    // SE-based stopping cannot fire before this many answers
-            core::f64 se_stop        = 0.0;  // stop when standard error <= this (0 = never stop early)
-            core::u32 max_per_topic  = 0;    // 0 = unlimited; otherwise a soft cap per topic
-            core::f64 topic_balance  = 0.25; // >0 nudges selection towards topics not used yet
-            core::u32 top_k_random   = 3;    // pick randomly among the k most informative (1..8): exposure control
-            core::f64 prior_mean     = 0.0;  // where we assume a new student starts
-            core::f64 prior_sd       = 1.0;  // how unsure we are about that (>0)
-            core::u64 seed           = 1;    // makes the exam reproducible
+            core::u32 max_questions = 20;   // hard cap on questions asked (also capped by bank size)
+            core::u32 min_questions = 5;    // SE-based stopping cannot fire before this many answers
+            core::f64 se_stop       = 0.0;  // stop when standard error <= this (0 = never stop early)
+            core::u32 max_per_topic = 0;    // 0 = unlimited; otherwise a soft cap per topic
+            core::f64 topic_balance = 0.25; // >0 nudges selection towards topics not used yet
+            core::u32 top_k_random  = 3;    // pick randomly among the k most informative (1..8): exposure control
+            core::f64 prior_mean    = 0.0;  // where we assume a new student starts
+            core::f64 prior_sd      = 1.0;  // how unsure we are about that (>0)
+            core::u64 seed          = 1;    // makes the exam reproducible
     };
 
     class ExamSession {
         public:
-            ExamSession () = default;
+            ExamSession ()                               = default;
             ExamSession (const ExamSession &)            = delete;
             ExamSession &operator= (const ExamSession &) = delete;
 
@@ -167,9 +166,11 @@ namespace adaptive_rank {
             [[nodiscard]] core::StatusCode next_question (core::QuestionId *out_id) noexcept;
 
             /// Record a graded answer. Works for any bank question, even out of order (offline replay).
-            [[nodiscard]] core::StatusCode submit (core::QuestionId id, bool correct, core::DurationMs time_ms) noexcept;
+            [[nodiscard]] core::StatusCode submit (core::QuestionId id, bool correct,
+                                                   core::DurationMs time_ms) noexcept;
             /// Record the chosen MCQ option; it is graded against the bank. *was_correct may be null.
-            [[nodiscard]] core::StatusCode submit_option (core::QuestionId id, core::u8 option, core::DurationMs time_ms,
+            [[nodiscard]] core::StatusCode submit_option (core::QuestionId id, core::u8 option,
+                                                          core::DurationMs time_ms,
                                                           bool *was_correct = nullptr) noexcept;
 
             [[nodiscard]] bool finished () const noexcept;
@@ -194,8 +195,8 @@ namespace adaptive_rank {
             SelectorConfig cfg_{};
             Rng rng_{};
 
-            core::u32 n_bank_{0};  // bank size captured at init
-            core::u32 cap_{0};     // effective max questions
+            core::u32 n_bank_{0};          // bank size captured at init
+            core::u32 cap_{0};             // effective max questions
             core::u32 *resp_idx_{nullptr}; // bank index of each answered question
             core::u8 *resp_ok_{nullptr};   // 1 if that answer was correct
             core::u8 *used_{nullptr};      // used_[bank index] = already answered
@@ -246,7 +247,7 @@ namespace adaptive_rank {
      * NEAREST tiers. Finally the paper is sorted easy -> hard.
      * Ok even when shortfall > 0 (check it). InvalidState for an empty blueprint/bank or null out.
      */
-    [[nodiscard]] core::StatusCode build_paper (core::Arena &arena, const QuestionBank &bank, const Blueprint &blueprint,
-                                                core::u64 seed, Paper *out) noexcept;
+    [[nodiscard]] core::StatusCode build_paper (core::Arena &arena, const QuestionBank &bank,
+                                                const Blueprint &blueprint, core::u64 seed, Paper *out) noexcept;
 
 } // namespace adaptive_rank
