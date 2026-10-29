@@ -99,6 +99,7 @@ namespace adaptive_rank {
         q.topic          = topic;
         q.tier           = tier;
         q.correct_option = correct_option;
+        q.type = QuestionType::MCQ;
         return insert_checked (q);
     }
 
@@ -112,7 +113,44 @@ namespace adaptive_rank {
         q.topic          = topic;
         q.tier           = tier_for_difficulty (difficulty);
         q.correct_option = correct_option;
+        q.type = QuestionType::MCQ;
         return insert_checked (q);
+    }
+
+    StatusCode QuestionBank::add_descriptive(QuestionId id, TopicId topic, DifficultyTier tier
+    )  noexcept {
+        if (static_cast<u32>(tier) >= kTierCount) {
+            return StatusCode::InvalidState;
+        }
+
+        Question q{};
+        q.difficulty = static_cast<f32>(tier_center(tier));
+        q.discrimination = 1.0f;
+        q.id = id;
+        q.topic = topic;
+        q.tier = tier;
+        q.type = QuestionType::DESCRIPTIVE;
+        q.correct_option = 0;
+
+        return insert_checked(q);
+    }
+
+    StatusCode QuestionBank::add_descriptive_calibrated(QuestionId id, TopicId topic, f64 difficulty
+    ) noexcept {
+        if (!valid_difficulty(difficulty)) {
+            return StatusCode::InvalidState;
+        }
+
+        Question q{};
+        q.difficulty = static_cast<f32>(difficulty);
+        q.discrimination = 1.0f;
+        q.id = id;
+        q.topic = topic;
+        q.tier = tier_for_difficulty(difficulty);
+        q.type = QuestionType::DESCRIPTIVE;
+        q.correct_option = 0;
+
+        return insert_checked(q);
     }
 
     u32 QuestionBank::index_of (QuestionId id) const noexcept {
@@ -148,8 +186,22 @@ namespace adaptive_rank {
         if (!(cfg.prior_sd > 0.0) || !(cfg.se_stop >= 0.0) || !(cfg.topic_balance >= 0.0)) return StatusCode::InvalidState;
         if (!(cfg.prior_mean == cfg.prior_mean)) return StatusCode::InvalidState;
 
-        const u32 n   = bank.size ();
-        const u32 cap = cfg.max_questions < n ? cfg.max_questions : n;
+        const u32 n = bank.size();
+
+        // Count only MCQs for the adaptive exam.
+        u32 mcq_count = 0;
+        for (u32 i = 0; i < n; ++i) {
+            const Question* q = bank.at(i);
+            if (q != nullptr && q->type == QuestionType::MCQ) {
+                ++mcq_count;
+            }
+        }
+
+        if (mcq_count == 0U) {
+            return StatusCode::InvalidState;
+        }
+
+        const u32 cap = cfg.max_questions < mcq_count ? cfg.max_questions : mcq_count;
 
         const Arena::Marker mark = arena.get_marker ();
         auto *idx  = static_cast<u32 *> (arena.allocate (static_cast<usize> (cap) * sizeof (u32), alignof (u32)));
@@ -237,6 +289,7 @@ namespace adaptive_rank {
         for (u32 i = 0; i < n_bank_; ++i) {
             if (used_[i] != 0U) continue;
             const Question *q = bank_->at (i);
+            if (q->type != QuestionType::MCQ) continue;
             const u32 used_in_topic = topic_used_[q->topic];
             if (enforce_topic_cap && cfg_.max_per_topic > 0U && used_in_topic >= cfg_.max_per_topic) continue;
 
@@ -281,6 +334,10 @@ namespace adaptive_rank {
         if (!ready ()) return StatusCode::InvalidState;
         const u32 idx = bank_->index_of (id);
         if (idx == QuestionBank::kNoIndex || idx >= n_bank_) return StatusCode::KeyNotFound;
+        const Question* q = bank_->at(idx);
+
+        if (q == nullptr || q->type != QuestionType::MCQ)
+            return StatusCode::InvalidState;
         if (used_[idx] != 0U) return StatusCode::DuplicateSubmission;
         if (n_answered_ >= cap_) return StatusCode::InvalidState; // exam already full
 
@@ -302,6 +359,8 @@ namespace adaptive_rank {
         if (!ready ()) return StatusCode::InvalidState;
         const Question *q = bank_->find (id);
         if (q == nullptr) return StatusCode::KeyNotFound;
+        if (q->type != QuestionType::MCQ)
+            return StatusCode::InvalidState;
         const bool ok = (option == q->correct_option);
         const StatusCode st = submit (id, ok, time_ms);
         if (st == StatusCode::Ok && was_correct != nullptr) *was_correct = ok;

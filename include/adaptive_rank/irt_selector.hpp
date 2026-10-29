@@ -66,12 +66,18 @@ namespace adaptive_rank {
     constexpr core::f64 kMaxDiscrimination = 4.0;
     constexpr core::u32 kTierCount       = static_cast<core::u32> (core::DifficultyTier::Count); // 5
 
+    enum class QuestionType : core::u8 {
+        MCQ,
+        DESCRIPTIVE
+    };
+
     struct Question {
             core::f32 difficulty;     // b, in [-4, 4]
             core::f32 discrimination; // a, in (0, 4]
             core::QuestionId id;
             core::TopicId topic;
             core::DifficultyTier tier;
+            QuestionType type;
             core::u8 correct_option; // index of the right MCQ option
     };
 
@@ -104,7 +110,8 @@ namespace adaptive_rank {
             [[nodiscard]] core::StatusCode add_calibrated (core::QuestionId id, core::TopicId topic,
                                                            core::f64 difficulty, core::u8 correct_option,
                                                            core::f64 discrimination = 1.0) noexcept;
-
+            [[nodiscard]] core::StatusCode add_descriptive (core::QuestionId id, core::TopicId topic, core::DifficultyTier tier) noexcept;
+            [[nodiscard]] core::StatusCode add_descriptive_calibrated(core::QuestionId id, core::TopicId topic, core::f64 difficulty) noexcept;
             [[nodiscard]] const Question *find (core::QuestionId id) const noexcept;
             /// Index (0..size-1) of a question id, or kNoIndex.
             [[nodiscard]] core::u32 index_of (core::QuestionId id) const noexcept;
