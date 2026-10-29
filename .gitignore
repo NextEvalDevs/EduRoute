@@ -3,4 +3,5 @@
 /build
 /cmake-build-debug
 /.idk
-.aicontdashboard/*.so
+.aicont
+/dashboard
