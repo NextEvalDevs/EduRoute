@@ -1,4 +1,4 @@
-#pragma  once
+#pragma once
 #include <cassert>
 #include <cstddef>
 #include <cstring>
@@ -114,5 +114,3 @@ namespace core {
     };
 
 } // namespace core
-
-

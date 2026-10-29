@@ -11,12 +11,18 @@ namespace adaptive_rank {
 
     f64 tier_center (DifficultyTier tier) noexcept {
         switch (tier) {
-            case DifficultyTier::Tier1: return -2.0;
-            case DifficultyTier::Tier2: return -1.0;
-            case DifficultyTier::Tier3: return 0.0;
-            case DifficultyTier::Tier4: return 1.0;
-            case DifficultyTier::Tier5: return 2.0;
-            default: return 0.0;
+            case DifficultyTier::Tier1:
+                return -2.0;
+            case DifficultyTier::Tier2:
+                return -1.0;
+            case DifficultyTier::Tier3:
+                return 0.0;
+            case DifficultyTier::Tier4:
+                return 1.0;
+            case DifficultyTier::Tier5:
+                return 2.0;
+            default:
+                return 0.0;
         }
     }
 
@@ -54,7 +60,8 @@ namespace adaptive_rank {
     StatusCode QuestionBank::init (Arena &arena, u32 capacity) noexcept {
         if (capacity == 0U || capacity > 65535U) return StatusCode::InvalidState;
         const Arena::Marker mark = arena.get_marker ();
-        auto *items = static_cast<Question *> (arena.allocate (static_cast<usize> (capacity) * sizeof (Question), alignof (Question)));
+        auto *items              = static_cast<Question *> (
+                arena.allocate (static_cast<usize> (capacity) * sizeof (Question), alignof (Question)));
         auto *index = static_cast<u16 *> (arena.allocate (65536U * sizeof (u16), alignof (u16)));
         if (items == nullptr || index == nullptr) {
             arena.reset_to_marker (mark);
@@ -81,8 +88,8 @@ namespace adaptive_rank {
         if (!valid_difficulty (static_cast<f64> (q.difficulty))) return StatusCode::InvalidState;
         if (index_[q.id] != kAbsent) return StatusCode::DuplicateSubmission;
         if (size_ >= capacity_) return StatusCode::OutOfMemory;
-        items_[size_]  = q;
-        index_[q.id]   = static_cast<u16> (size_);
+        items_[size_] = q;
+        index_[q.id]  = static_cast<u16> (size_);
         ++tier_count_[static_cast<u32> (q.tier)];
         ++size_;
         return StatusCode::Ok;
@@ -99,7 +106,7 @@ namespace adaptive_rank {
         q.topic          = topic;
         q.tier           = tier;
         q.correct_option = correct_option;
-        q.type = QuestionType::MCQ;
+        q.type           = QuestionType::MCQ;
         return insert_checked (q);
     }
 
@@ -113,44 +120,38 @@ namespace adaptive_rank {
         q.topic          = topic;
         q.tier           = tier_for_difficulty (difficulty);
         q.correct_option = correct_option;
-        q.type = QuestionType::MCQ;
+        q.type           = QuestionType::MCQ;
         return insert_checked (q);
     }
 
-    StatusCode QuestionBank::add_descriptive(QuestionId id, TopicId topic, DifficultyTier tier
-    )  noexcept {
-        if (static_cast<u32>(tier) >= kTierCount) {
-            return StatusCode::InvalidState;
-        }
+    StatusCode QuestionBank::add_descriptive (QuestionId id, TopicId topic, DifficultyTier tier) noexcept {
+        if (static_cast<u32> (tier) >= kTierCount) { return StatusCode::InvalidState; }
 
         Question q{};
-        q.difficulty = static_cast<f32>(tier_center(tier));
+        q.difficulty     = static_cast<f32> (tier_center (tier));
         q.discrimination = 1.0f;
-        q.id = id;
-        q.topic = topic;
-        q.tier = tier;
-        q.type = QuestionType::DESCRIPTIVE;
+        q.id             = id;
+        q.topic          = topic;
+        q.tier           = tier;
+        q.type           = QuestionType::DESCRIPTIVE;
         q.correct_option = 0;
 
-        return insert_checked(q);
+        return insert_checked (q);
     }
 
-    StatusCode QuestionBank::add_descriptive_calibrated(QuestionId id, TopicId topic, f64 difficulty
-    ) noexcept {
-        if (!valid_difficulty(difficulty)) {
-            return StatusCode::InvalidState;
-        }
+    StatusCode QuestionBank::add_descriptive_calibrated (QuestionId id, TopicId topic, f64 difficulty) noexcept {
+        if (!valid_difficulty (difficulty)) { return StatusCode::InvalidState; }
 
         Question q{};
-        q.difficulty = static_cast<f32>(difficulty);
+        q.difficulty     = static_cast<f32> (difficulty);
         q.discrimination = 1.0f;
-        q.id = id;
-        q.topic = topic;
-        q.tier = tier_for_difficulty(difficulty);
-        q.type = QuestionType::DESCRIPTIVE;
+        q.id             = id;
+        q.topic          = topic;
+        q.tier           = tier_for_difficulty (difficulty);
+        q.type           = QuestionType::DESCRIPTIVE;
         q.correct_option = 0;
 
-        return insert_checked(q);
+        return insert_checked (q);
     }
 
     u32 QuestionBank::index_of (QuestionId id) const noexcept {
@@ -180,26 +181,24 @@ namespace adaptive_rank {
                4U * alignof (std::max_align_t);
     }
 
-    StatusCode ExamSession::init (Arena &arena, const QuestionBank &bank, StudentId student, const SelectorConfig &cfg) noexcept {
+    StatusCode ExamSession::init (Arena &arena, const QuestionBank &bank, StudentId student,
+                                  const SelectorConfig &cfg) noexcept {
         if (!bank.ready () || bank.size () == 0U) return StatusCode::InvalidState;
         if (cfg.max_questions == 0U) return StatusCode::InvalidState;
-        if (!(cfg.prior_sd > 0.0) || !(cfg.se_stop >= 0.0) || !(cfg.topic_balance >= 0.0)) return StatusCode::InvalidState;
+        if (!(cfg.prior_sd > 0.0) || !(cfg.se_stop >= 0.0) || !(cfg.topic_balance >= 0.0))
+            return StatusCode::InvalidState;
         if (!(cfg.prior_mean == cfg.prior_mean)) return StatusCode::InvalidState;
 
-        const u32 n = bank.size();
+        const u32 n = bank.size ();
 
         // Count only MCQs for the adaptive exam.
         u32 mcq_count = 0;
         for (u32 i = 0; i < n; ++i) {
-            const Question* q = bank.at(i);
-            if (q != nullptr && q->type == QuestionType::MCQ) {
-                ++mcq_count;
-            }
+            const Question *q = bank.at (i);
+            if (q != nullptr && q->type == QuestionType::MCQ) { ++mcq_count; }
         }
 
-        if (mcq_count == 0U) {
-            return StatusCode::InvalidState;
-        }
+        if (mcq_count == 0U) { return StatusCode::InvalidState; }
 
         const u32 cap = cfg.max_questions < mcq_count ? cfg.max_questions : mcq_count;
 
@@ -214,9 +213,9 @@ namespace adaptive_rank {
         }
         std::memset (used, 0, n);
 
-        bank_          = &bank;
-        student_       = student;
-        cfg_           = cfg;
+        bank_    = &bank;
+        student_ = student;
+        cfg_     = cfg;
         if (cfg_.top_k_random < 1U) cfg_.top_k_random = 1U;
         if (cfg_.top_k_random > 8U) cfg_.top_k_random = 8U;
         rng_.reseed (cfg.seed ^ (static_cast<u64> (student) * 0xD6E8FEB86659FD93ULL));
@@ -231,9 +230,10 @@ namespace adaptive_rank {
         pending_       = kNone;
         for (u32 i = 0; i < 256U; ++i) topic_used_[i] = 0;
 
-        const f64 m = cfg.prior_mean < kMinTheta ? kMinTheta : (cfg.prior_mean > kMaxTheta ? kMaxTheta : cfg.prior_mean);
-        theta_      = m;
-        se_         = cfg.prior_sd;
+        const f64 m =
+                cfg.prior_mean < kMinTheta ? kMinTheta : (cfg.prior_mean > kMaxTheta ? kMaxTheta : cfg.prior_mean);
+        theta_ = m;
+        se_    = cfg.prior_sd;
         return StatusCode::Ok;
     }
 
@@ -334,19 +334,18 @@ namespace adaptive_rank {
         if (!ready ()) return StatusCode::InvalidState;
         const u32 idx = bank_->index_of (id);
         if (idx == QuestionBank::kNoIndex || idx >= n_bank_) return StatusCode::KeyNotFound;
-        const Question* q = bank_->at(idx);
+        const Question *q = bank_->at (idx);
 
-        if (q == nullptr || q->type != QuestionType::MCQ)
-            return StatusCode::InvalidState;
+        if (q == nullptr || q->type != QuestionType::MCQ) return StatusCode::InvalidState;
         if (used_[idx] != 0U) return StatusCode::DuplicateSubmission;
         if (n_answered_ >= cap_) return StatusCode::InvalidState; // exam already full
 
-        used_[idx]                = 1;
-        resp_idx_[n_answered_]    = idx;
-        resp_ok_[n_answered_]     = is_correct ? 1U : 0U;
+        used_[idx]             = 1;
+        resp_idx_[n_answered_] = idx;
+        resp_ok_[n_answered_]  = is_correct ? 1U : 0U;
         ++n_answered_;
         if (is_correct) ++n_correct_;
-        const u64 t = static_cast<u64> (total_time_ms_) + static_cast<u64> (time_ms);
+        const u64 t    = static_cast<u64> (total_time_ms_) + static_cast<u64> (time_ms);
         total_time_ms_ = t > 0xFFFFFFFFULL ? 0xFFFFFFFFU : static_cast<u32> (t); // saturate, never wrap
         const u8 topic = bank_->at (idx)->topic;
         if (topic_used_[topic] < 0xFFFFU) ++topic_used_[topic];
@@ -359,9 +358,8 @@ namespace adaptive_rank {
         if (!ready ()) return StatusCode::InvalidState;
         const Question *q = bank_->find (id);
         if (q == nullptr) return StatusCode::KeyNotFound;
-        if (q->type != QuestionType::MCQ)
-            return StatusCode::InvalidState;
-        const bool ok = (option == q->correct_option);
+        if (q->type != QuestionType::MCQ) return StatusCode::InvalidState;
+        const bool ok       = (option == q->correct_option);
         const StatusCode st = submit (id, ok, time_ms);
         if (st == StatusCode::Ok && was_correct != nullptr) *was_correct = ok;
         return st;
@@ -473,7 +471,8 @@ namespace adaptive_rank {
 
     } // namespace
 
-    StatusCode build_paper (Arena &arena, const QuestionBank &bank, const Blueprint &blueprint, u64 seed, Paper *out) noexcept {
+    StatusCode build_paper (Arena &arena, const QuestionBank &bank, const Blueprint &blueprint, u64 seed,
+                            Paper *out) noexcept {
         if (out == nullptr) return StatusCode::InvalidState;
         *out = Paper{};
         if (!bank.ready () || bank.size () == 0U) return StatusCode::InvalidState;
@@ -483,16 +482,17 @@ namespace adaptive_rank {
         const u32 n_bank = bank.size ();
         const u32 cap    = total < n_bank ? total : n_bank;
 
-        auto *ids = static_cast<QuestionId *> (arena.allocate (static_cast<usize> (cap) * sizeof (QuestionId), alignof (QuestionId)));
+        auto *ids = static_cast<QuestionId *> (
+                arena.allocate (static_cast<usize> (cap) * sizeof (QuestionId), alignof (QuestionId)));
         if (ids == nullptr) return StatusCode::OutOfMemory;
         const Arena::Marker scratch_mark = arena.get_marker ();
-        auto *taken = static_cast<u8 *> (arena.allocate (n_bank, 1));
+        auto *taken                      = static_cast<u8 *> (arena.allocate (n_bank, 1));
         if (taken == nullptr) return StatusCode::OutOfMemory;
         std::memset (taken, 0, n_bank);
 
         u16 topic_used[256] = {};
         Rng rng (seed);
-        u32 placed = 0;
+        u32 placed              = 0;
         u32 deficit[kTierCount] = {};
 
         // Pass 1: each tier takes what it can of its own quota.
@@ -500,7 +500,7 @@ namespace adaptive_rank {
             for (u32 c = 0; c < blueprint.per_tier[t]; ++c) {
                 u32 idx = 0;
                 if (placed < cap && pick_in_tier (bank, t, taken, topic_used, rng, &idx)) {
-                    taken[idx] = 1;
+                    taken[idx]    = 1;
                     ids[placed++] = bank.at (idx)->id;
                     ++topic_used[bank.at (idx)->topic];
                 } else {
@@ -519,7 +519,7 @@ namespace adaptive_rank {
                         const u32 from = side == 0U ? t - dist : t + dist;
                         u32 idx        = 0;
                         if (pick_in_tier (bank, from, taken, topic_used, rng, &idx)) {
-                            taken[idx] = 1;
+                            taken[idx]    = 1;
                             ids[placed++] = bank.at (idx)->id;
                             ++topic_used[bank.at (idx)->topic];
                             got = true;

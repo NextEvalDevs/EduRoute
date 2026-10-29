@@ -77,6 +77,7 @@ add_library(eduroute_engine STATIC
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
         include/eduroute_c_api.h
+        include/anticheat/collusion_graph.hpp
 )
 
 target_include_directories(eduroute_engine PUBLIC
@@ -88,6 +89,7 @@ add_library(eduroute SHARED
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
         include/eduroute_c_api.h
+        include/anticheat/collusion_graph.hpp
 )
 
 target_link_libraries(eduroute PRIVATE eduroute_engine)
@@ -99,11 +101,13 @@ set_target_properties(eduroute PROPERTIES
 add_executable(stress_sim sim/stress_sim.cpp
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
-        include/eduroute_c_api.h)
+        include/eduroute_c_api.h
+        include/anticheat/collusion_graph.hpp)
 target_link_libraries(stress_sim PRIVATE eduroute_engine)
 
 add_executable(test_adts sim/test_adts.cpp
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
-        include/eduroute_c_api.h)
+        include/eduroute_c_api.h
+        include/anticheat/collusion_graph.hpp)
 target_link_libraries(test_adts PRIVATE eduroute_engine)

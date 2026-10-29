@@ -33,8 +33,9 @@ namespace adaptive_rank {
 
     StatusCode FenwickScore::init (Arena &arena) noexcept {
         const Arena::Marker mark = arena.get_marker ();
-        auto *tree = static_cast<u32 *> (arena.allocate ((static_cast<usize> (kBuckets) + 1U) * sizeof (u32), alignof (u32)));
-        auto *cnt  = static_cast<u32 *> (arena.allocate (static_cast<usize> (kBuckets) * sizeof (u32), alignof (u32)));
+        auto *tree               = static_cast<u32 *> (
+                arena.allocate ((static_cast<usize> (kBuckets) + 1U) * sizeof (u32), alignof (u32)));
+        auto *cnt = static_cast<u32 *> (arena.allocate (static_cast<usize> (kBuckets) * sizeof (u32), alignof (u32)));
         if (tree == nullptr || cnt == nullptr) {
             arena.reset_to_marker (mark); // give back what we took, leave object unusable
             tree_  = nullptr;

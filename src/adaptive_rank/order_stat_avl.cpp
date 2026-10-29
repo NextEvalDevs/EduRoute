@@ -10,7 +10,8 @@ namespace core::adaptive_rank {
 
     StatusCode OrderStatAvl::init (Arena &arena, u32 capacity) noexcept {
         if (capacity == 0U || capacity >= kNil) return StatusCode::InvalidState;
-        auto *pool = static_cast<Node *> (arena.allocate (static_cast<usize> (capacity) * sizeof (Node), alignof (Node)));
+        auto *pool =
+                static_cast<Node *> (arena.allocate (static_cast<usize> (capacity) * sizeof (Node), alignof (Node)));
         if (pool == nullptr) {
             nodes_    = nullptr;
             capacity_ = 0;
@@ -61,14 +62,14 @@ namespace core::adaptive_rank {
     u32 OrderStatAvl::sz (u32 n) const noexcept { return n == kNil ? 0U : nodes_[n].subtree_size; }
 
     void OrderStatAvl::pull (u32 n) noexcept {
-        const i32 hl            = h (nodes_[n].left);
-        const i32 hr            = h (nodes_[n].right);
+        const i32 hl           = h (nodes_[n].left);
+        const i32 hr           = h (nodes_[n].right);
         nodes_[n].height       = static_cast<u8> ((hl > hr ? hl : hr) + 1);
         nodes_[n].subtree_size = sz (nodes_[n].left) + sz (nodes_[n].right) + 1U;
     }
 
     u32 OrderStatAvl::rotate_left (u32 x) noexcept {
-        const u32 y   = nodes_[x].right;
+        const u32 y     = nodes_[x].right;
         nodes_[x].right = nodes_[y].left;
         nodes_[y].left  = x;
         pull (x);
@@ -77,7 +78,7 @@ namespace core::adaptive_rank {
     }
 
     u32 OrderStatAvl::rotate_right (u32 y) noexcept {
-        const u32 x   = nodes_[y].left;
+        const u32 x     = nodes_[y].left;
         nodes_[y].left  = nodes_[x].right;
         nodes_[x].right = y;
         pull (y);
@@ -105,8 +106,10 @@ namespace core::adaptive_rank {
 
     u32 OrderStatAvl::insert_rec (u32 n, u32 idx) noexcept {
         if (n == kNil) return idx;
-        if (nodes_[idx].key < nodes_[n].key) nodes_[n].left = insert_rec (nodes_[n].left, idx);
-        else nodes_[n].right = insert_rec (nodes_[n].right, idx);
+        if (nodes_[idx].key < nodes_[n].key)
+            nodes_[n].left = insert_rec (nodes_[n].left, idx);
+        else
+            nodes_[n].right = insert_rec (nodes_[n].right, idx);
         return rebalance (n);
     }
 
@@ -144,8 +147,8 @@ namespace core::adaptive_rank {
                 return child;
             }
             // Two children: the smallest node of the right side takes this node's place.
-            u32 min_idx = kNil;
-            const u32 new_right = detach_min (nodes_[n].right, min_idx);
+            u32 min_idx           = kNil;
+            const u32 new_right   = detach_min (nodes_[n].right, min_idx);
             nodes_[min_idx].left  = nodes_[n].left;
             nodes_[min_idx].right = new_right;
             free_node (n);
@@ -179,9 +182,12 @@ namespace core::adaptive_rank {
         if (!ready ()) return false;
         u32 n = root_;
         while (n != kNil) {
-            if (key < nodes_[n].key) n = nodes_[n].left;
-            else if (nodes_[n].key < key) n = nodes_[n].right;
-            else return true;
+            if (key < nodes_[n].key)
+                n = nodes_[n].left;
+            else if (nodes_[n].key < key)
+                n = nodes_[n].right;
+            else
+                return true;
         }
         return false;
     }
@@ -275,4 +281,4 @@ namespace core::adaptive_rank {
         return seen == size_ && sz (root_) == size_;
     }
 
-} // namespace adaptive_rank
+} // namespace core::adaptive_rank

@@ -30,7 +30,7 @@ namespace core::adaptive_rank {
      */
     class OrderStatAvl {
         public:
-            OrderStatAvl () = default;
+            OrderStatAvl ()                                = default;
             OrderStatAvl (const OrderStatAvl &)            = delete;
             OrderStatAvl &operator= (const OrderStatAvl &) = delete;
 
@@ -48,7 +48,8 @@ namespace core::adaptive_rank {
 
             [[nodiscard]] bool contains (const core::LeaderboardKey &key) const noexcept;
             /// Exact rank (1 = best) of a key that is in the tree.
-            [[nodiscard]] core::StatusCode rank_of (const core::LeaderboardKey &key, core::u32 *out_rank) const noexcept;
+            [[nodiscard]] core::StatusCode rank_of (const core::LeaderboardKey &key,
+                                                    core::u32 *out_rank) const noexcept;
             /// How many stored keys are strictly better than `key` (works for keys not in the tree too).
             [[nodiscard]] core::u32 count_better (const core::LeaderboardKey &key) const noexcept;
             /// The key at rank k (1 = best).
@@ -78,7 +79,7 @@ namespace core::adaptive_rank {
             core::u32 capacity_{0};
             core::u32 size_{0};
             core::u32 root_{kNil};
-            core::u32 next_unused_{0}; // bump pointer into the pool
+            core::u32 next_unused_{0};  // bump pointer into the pool
             core::u32 free_head_{kNil}; // erased nodes, linked through `left`
 
             [[nodiscard]] core::u32 alloc_node (const core::LeaderboardKey &key) noexcept;
@@ -99,4 +100,4 @@ namespace core::adaptive_rank {
                         core::u32 &nodes_seen, core::i32 &height_out) const noexcept;
     };
 
-} // namespace adaptive_rank
+} // namespace core::adaptive_rank

@@ -1,8 +1,8 @@
 #pragma once
 
+#include <cassert>
 #include "core/arena_alloc.hpp"
 #include "core/dyn_array.hpp"
-#include <cassert>
 #include "core/types.hpp"
 
 namespace core {
