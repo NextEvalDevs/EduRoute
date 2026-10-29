@@ -12,19 +12,34 @@ namespace core::anticheat {
         const Arena::Marker mark = arena.get_marker ();
 
         dt_index_ = arena.create<HashMap<u64, u32>> (arena, 4096u);
-        if (!dt_index_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!dt_index_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         mcq_index_ = arena.create<HashMap<u32, McqPostingNode *>> (arena, 4096u);
-        if (!mcq_index_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!mcq_index_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         option_cnt_ = arena.create<HashMap<u32, u32>> (arena, 4096u);
-        if (!option_cnt_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!option_cnt_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         question_total_ = arena.create<HashMap<u32, u32>> (arena, 1024u);
-        if (!question_total_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!question_total_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         pair_map_ = arena.create<HashMap<u64, PairScore>> (arena, max_pairs);
-        if (!pair_map_) { arena.reset_to_marker (mark); return StatusCode::OutOfMemory; }
+        if (!pair_map_) {
+            arena.reset_to_marker (mark);
+            return StatusCode::OutOfMemory;
+        }
 
         ready_ = true;
         return StatusCode::Ok;
@@ -40,8 +55,7 @@ namespace core::anticheat {
     // Internal helper: add_pair_hit
     // =========================================================================
 
-    void AnomalyStats::add_pair_hit (StudentId a, StudentId b,
-                                     f32 time_delta, f32 err_delta,
+    void AnomalyStats::add_pair_hit (StudentId a, StudentId b, f32 time_delta, f32 err_delta,
                                      Array<StatAnomalyMatch> &out_matches) noexcept {
         const u64 key = pair_key (a, b);
         PairScore *ps = pair_map_->find (key);
@@ -51,7 +65,7 @@ namespace core::anticheat {
             ps = pair_map_->find (key);
         } else {
             ps->time_score += time_delta;
-            ps->err_score  += err_delta;
+            ps->err_score += err_delta;
         }
 
         // Determine which of a/b is the "other" relative to whichever caller placed us.
@@ -66,8 +80,7 @@ namespace core::anticheat {
     // record_dt
     // =========================================================================
 
-    void AnomalyStats::record_dt (StudentId sid, QuestionId qid, u32 dt_ms,
-                                  Arena &scratch,
+    void AnomalyStats::record_dt (StudentId sid, QuestionId qid, u32 dt_ms, Arena &scratch,
                                   Array<StatAnomalyMatch> &out_matches) noexcept {
         if (!ready_) return;
 
@@ -94,10 +107,10 @@ namespace core::anticheat {
         // We build a tiny parallel structure: one PostingNode list per qid stored
         // through the mcq_index_ channel keyed with a synthetic option = 0xFF.
         constexpr u8 DT_SENTINEL_OPTION = 0xFEu;
-        const u32    list_key           = mcq_key (qid, DT_SENTINEL_OPTION);
+        const u32 list_key              = mcq_key (qid, DT_SENTINEL_OPTION);
 
         McqPostingNode **list_head_slot = mcq_index_->find (list_key);
-        McqPostingNode  *list_head      = list_head_slot ? *list_head_slot : nullptr;
+        McqPostingNode *list_head       = list_head_slot ? *list_head_slot : nullptr;
 
         // Compare against every previously recorded student for this question.
         for (McqPostingNode *cur = list_head; cur != nullptr; cur = cur->next) {
@@ -119,7 +132,10 @@ namespace core::anticheat {
         // Append this student to the per-question posting list if not already there.
         bool already_listed = false;
         for (McqPostingNode *cur = list_head; cur != nullptr; cur = cur->next) {
-            if (cur->student_id == sid) { already_listed = true; break; }
+            if (cur->student_id == sid) {
+                already_listed = true;
+                break;
+            }
         }
         if (!already_listed) {
             auto *node       = arena_->create<McqPostingNode> ();
@@ -135,9 +151,7 @@ namespace core::anticheat {
     // record_mcq
     // =========================================================================
 
-    void AnomalyStats::record_mcq (StudentId sid, QuestionId qid,
-                                   u8 chosen_option, u8 correct_option,
-                                   Arena  &scratch,
+    void AnomalyStats::record_mcq (StudentId sid, QuestionId qid, u8 chosen_option, u8 correct_option, Arena &scratch,
                                    Array<StatAnomalyMatch> &out_matches) noexcept {
         if (!ready_) return;
 
@@ -145,7 +159,7 @@ namespace core::anticheat {
 
         // Update per-(qid) total submission count.
         const u32 qtot_key = static_cast<u32> (qid);
-        u32 *qtot = question_total_->find (qtot_key);
+        u32 *qtot          = question_total_->find (qtot_key);
         if (qtot == nullptr) {
             question_total_->insert (qtot_key, 1u);
         } else {
@@ -155,7 +169,7 @@ namespace core::anticheat {
 
         // Update per-(qid, option) count.
         const u32 opt_key = mcq_key (qid, chosen_option);
-        u32 *opt_cnt = option_cnt_->find (opt_key);
+        u32 *opt_cnt      = option_cnt_->find (opt_key);
         if (opt_cnt == nullptr) {
             option_cnt_->insert (opt_key, 1u);
             opt_cnt = option_cnt_->find (opt_key);
@@ -171,9 +185,9 @@ namespace core::anticheat {
 
         // Check if this option is "rare".
         const u32 this_opt_count = opt_cnt ? *opt_cnt : 1u;
-        const f32 freq = (total_submissions > 0u)
-                             ? static_cast<f32> (this_opt_count) / static_cast<f32> (total_submissions)
-                             : 1.0f;
+        const f32 freq           = (total_submissions > 0u)
+                                           ? static_cast<f32> (this_opt_count) / static_cast<f32> (total_submissions)
+                                           : 1.0f;
 
         if (freq >= RARE_ERROR_FREQ_THRESHOLD) {
             (void) scratch;
@@ -182,9 +196,9 @@ namespace core::anticheat {
 
         // Walk the posting list for (qid, chosen_option): these are all students
         // who also chose this rare wrong option.
-        const u32    plist_key      = mcq_key (qid, chosen_option);
-        McqPostingNode **head_slot  = mcq_index_->find (plist_key);
-        McqPostingNode  *head       = head_slot ? *head_slot : nullptr;
+        const u32 plist_key        = mcq_key (qid, chosen_option);
+        McqPostingNode **head_slot = mcq_index_->find (plist_key);
+        McqPostingNode *head       = head_slot ? *head_slot : nullptr;
 
         for (McqPostingNode *cur = head; cur != nullptr; cur = cur->next) {
             if (cur->student_id == sid) continue;
@@ -194,7 +208,10 @@ namespace core::anticheat {
         // Append this student to the posting list (if not already present).
         bool already_listed = false;
         for (McqPostingNode *cur = head; cur != nullptr; cur = cur->next) {
-            if (cur->student_id == sid) { already_listed = true; break; }
+            if (cur->student_id == sid) {
+                already_listed = true;
+                break;
+            }
         }
         if (!already_listed) {
             auto *node       = arena_->create<McqPostingNode> ();
@@ -210,14 +227,11 @@ namespace core::anticheat {
     // get_pair_scores
     // =========================================================================
 
-    StatusCode AnomalyStats::get_pair_scores (StudentId a, StudentId b,
-                                              f32 *out_time_score,
+    StatusCode AnomalyStats::get_pair_scores (StudentId a, StudentId b, f32 *out_time_score,
                                               f32 *out_err_score) const noexcept {
-        if (!ready_ || out_time_score == nullptr || out_err_score == nullptr) {
-            return StatusCode::InvalidState;
-        }
-        const u64 key   = pair_key (a, b);
-        PairScore *ps   = pair_map_->find (key);
+        if (!ready_ || out_time_score == nullptr || out_err_score == nullptr) { return StatusCode::InvalidState; }
+        const u64 key = pair_key (a, b);
+        PairScore *ps = pair_map_->find (key);
         if (ps == nullptr) return StatusCode::KeyNotFound;
         *out_time_score = ps->time_score;
         *out_err_score  = ps->err_score;
