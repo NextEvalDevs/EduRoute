@@ -6,9 +6,7 @@
 namespace sync_engine {
 namespace {
 
-// --------------------------------------------------
-// WAL FILE FORMAT
-// --------------------------------------------------
+// File format constants used when writing and recovering WAL records.
 
 constexpr core::u8 FILE_MAGIC[4] = {'E', 'R', 'W', 'L'};
 
@@ -19,6 +17,7 @@ constexpr core::u8 RECORD_ACK = 2;
 
 // Header:
 // magic[4] + version[4] + type[1] + payload_size[4] + checksum[8]
+// Each record has a fixed-size header followed by its payload.
 constexpr core::usize HEADER_SIZE = 21;
 
 // DATA payload:
@@ -29,30 +28,31 @@ constexpr core::usize HEADER_SIZE = 21;
 // original_size[8]
 // delta_count[8]
 // byte_count[8]
+// Fixed metadata stored before the frequency table and compressed bytes.
 constexpr core::usize DATA_FIXED_SIZE = 52;
 
+// One 32-bit frequency value for each possible byte value.
 constexpr core::usize FREQUENCY_BYTES = 256 * 4;
 
 constexpr core::u32 MAX_COMPRESSED_BYTES = 64u * 1024u * 1024u;
 
 
-// --------------------------------------------------
-// INTEGER SERIALIZATION
-// Little-endian format
-// --------------------------------------------------
-
+// Helpers for storing and reading integers in little-endian byte order.Little-endian format
+// Split a 32-bit value into four little-endian bytes.
 void put_u32(core::u8* out, core::u32 value) noexcept {
     for (core::usize i = 0; i < 4; ++i) {
         out[i] = static_cast<core::u8>(value >> (i * 8));
     }
 }
 
+// Split a 64-bit value into eight little-endian bytes.
 void put_u64(core::u8* out, core::u64 value) noexcept {
     for (core::usize i = 0; i < 8; ++i) {
         out[i] = static_cast<core::u8>(value >> (i * 8));
     }
 }
 
+// Rebuild a 32-bit value from four little-endian bytes.
 core::u32 get_u32(const core::u8* in) noexcept {
     core::u32 value = 0;
 
@@ -63,6 +63,7 @@ core::u32 get_u32(const core::u8* in) noexcept {
     return value;
 }
 
+// Rebuild a 64-bit value from eight little-endian bytes.
 core::u64 get_u64(const core::u8* in) noexcept {
     core::u64 value = 0;
 
@@ -74,10 +75,9 @@ core::u64 get_u64(const core::u8* in) noexcept {
 }
 
 
-// --------------------------------------------------
-// CHECKSUM
-// --------------------------------------------------
+// Checksum used to detect damaged or incomplete records.
 
+// Hash the header fields and payload so corrupted records can be detected.
 core::Hash64 checksum(
     const core::u8* header_prefix,
     const core::u8* payload,
@@ -99,10 +99,9 @@ core::Hash64 checksum(
 }
 
 
-// --------------------------------------------------
-// FILE HELPERS
-// --------------------------------------------------
+// Helpers for reading and writing complete records.
 
+// Read the requested number of bytes; fail if the file ends too early.
 bool read_exact(
     std::FILE* file,
     void* destination,
@@ -114,6 +113,7 @@ bool read_exact(
 }
 
 
+// Write one complete record: header, payload, then flush it to disk.
 bool write_record(
     std::FILE* file,
     core::u8 type,
@@ -153,10 +153,9 @@ bool write_record(
 }
 
 
-// --------------------------------------------------
-// COMPRESSED DATA VALIDATION
-// --------------------------------------------------
+// Check compressed data before storing or using it.
 
+// Check that the bit count, byte count, frequencies and original size agree.
 bool validate_compressed(
     const CompressedTextDelta& value
 ) noexcept {
@@ -193,9 +192,7 @@ bool validate_compressed(
 } // namespace
 
 
-// ==================================================
-// CONSTRUCTOR / DESTRUCTOR
-// ==================================================
+// Set up the WAL state and release the file when finished.
 
 WriteAheadLog::WriteAheadLog(core::Arena& arena) noexcept
     : arena_(arena),
@@ -211,10 +208,9 @@ WriteAheadLog::~WriteAheadLog() {
 }
 
 
-// ==================================================
-// OPEN
-// ==================================================
+// Open the WAL file and recover records already stored on disk.
 
+// Open the file and replay its contents to restore pending records.
 bool WriteAheadLog::open(const char* filepath) {
 
     if (!filepath || filepath[0] == '\0') {
@@ -243,9 +239,7 @@ bool WriteAheadLog::open(const char* filepath) {
 }
 
 
-// ==================================================
-// CLOSE
-// ==================================================
+// Flush pending writes and close the WAL file.
 
 void WriteAheadLog::close() noexcept {
 
@@ -262,10 +256,9 @@ bool WriteAheadLog::is_open() const noexcept {
 }
 
 
-// ==================================================
-// COPY COMPRESSED DATA
-// ==================================================
+// Copy compressed data into a record owned by this WAL.
 
+// Copy the encoded bytes and frequency table into the destination object.
 bool WriteAheadLog::copy_compressed(
     const CompressedTextDelta& source,
     CompressedTextDelta& destination
@@ -295,10 +288,9 @@ bool WriteAheadLog::copy_compressed(
 }
 
 
-// ==================================================
-// APPEND
-// ==================================================
+// Add a new compressed delta record to the end of the WAL file.
 
+// Assign a sequence number, serialize the delta and persist it to disk.
 bool WriteAheadLog::append(
     core::StudentId student_id,
     core::TimestampMs timestamp_ms,
@@ -319,7 +311,7 @@ bool WriteAheadLog::append(
 
     const core::u64 sequence = last_sequence_ + 1;
 
-    // Calculate payload size.
+    // Work out the exact payload size before allocating its buffer.
     const core::usize payload_size =
         DATA_FIXED_SIZE +
         FREQUENCY_BYTES +
@@ -329,7 +321,7 @@ bool WriteAheadLog::append(
         return false;
     }
 
-    // Build serialized payload.
+    // Build the payload in the same order expected by read_all().
     core::Array<core::u8> payload(arena_, payload_size);
 
     auto push_u32 = [&payload](core::u32 value) {
@@ -347,7 +339,7 @@ bool WriteAheadLog::append(
         }
     };
 
-    // Fixed metadata.
+    // Store identifiers and sizes before the variable-length compressed data.
     push_u64(sequence);
     push_u32(student_id);
     push_u64(timestamp_ms);
@@ -357,12 +349,12 @@ bool WriteAheadLog::append(
     push_u64(static_cast<core::u64>(compressed.delta_count));
     push_u64(static_cast<core::u64>(compressed.bytes.size()));
 
-    // Huffman frequency table.
+    // Save the frequencies needed to rebuild the Huffman tree later.
     for (core::usize i = 0; i < 256; ++i) {
         push_u32(compressed.frequencies[i]);
     }
 
-    // Compressed bytes.
+    // Store the actual Huffman-encoded byte stream.
     for (core::usize i = 0; i < compressed.bytes.size(); ++i) {
         payload.push_back(compressed.bytes[i]);
     }
@@ -371,7 +363,7 @@ bool WriteAheadLog::append(
         return false;
     }
 
-    // Allocate and construct the in-memory record.
+    // Prepare the in-memory copy used by the syncing code.
     WalRecord* record = arena_.create<WalRecord>(arena_);
 
     if (!record) {
@@ -386,7 +378,7 @@ bool WriteAheadLog::append(
         return false;
     }
 
-    // Persist before making the record visible in memory.
+    // Write to disk first; add it to the pending list only if the write succeeds.
     if (!write_record(
             file_,
             RECORD_DATA,
@@ -408,10 +400,9 @@ bool WriteAheadLog::append(
 }
 
 
-// ==================================================
-// PEEK NEXT
-// ==================================================
+// Find the oldest record that has not been acknowledged yet.
 
+// Return the first unacknowledged record without removing it from the WAL.
 bool WriteAheadLog::peek_next(
     const WalRecord*& out
 ) const noexcept {
@@ -430,10 +421,9 @@ bool WriteAheadLog::peek_next(
 }
 
 
-// ==================================================
-// ACKNOWLEDGE
-// ==================================================
+// Record which sequence has been acknowledged by the server.
 
+// Append an ACK record so the acknowledged position survives a restart.
 bool WriteAheadLog::acknowledge(core::u64 sequence) {
 
     if (!file_ ||
@@ -466,10 +456,9 @@ bool WriteAheadLog::acknowledge(core::u64 sequence) {
 }
 
 
-// ==================================================
-// PENDING COUNT
-// ==================================================
+// Count records that are still waiting to be acknowledged.
 
+// A record is pending when its sequence is greater than the last ACK.
 core::usize WriteAheadLog::pending_count() const noexcept {
 
     core::usize count = 0;
@@ -485,9 +474,7 @@ core::usize WriteAheadLog::pending_count() const noexcept {
 }
 
 
-// ==================================================
-// SEQUENCE GETTERS
-// ==================================================
+// Return the latest sequence numbers tracked by this WAL.
 
 core::u64 WriteAheadLog::acknowledged_sequence() const noexcept {
     return acknowledged_sequence_;
@@ -499,10 +486,9 @@ core::u64 WriteAheadLog::last_sequence() const noexcept {
 }
 
 
-// ==================================================
-// RECOVERY
-// ==================================================
+// Read the file and rebuild the in-memory WAL state.
 
+// Replay records in file order to restore sequence numbers and pending work.
 bool WriteAheadLog::read_all() noexcept {
 
     if (!file_) {
@@ -520,17 +506,17 @@ bool WriteAheadLog::read_all() noexcept {
         const core::usize got =
             std::fread(header, 1, sizeof(header), file_);
 
-        // Normal end of file.
+        // No more records remain in the file.
         if (got == 0 && std::feof(file_)) {
             break;
         }
 
-        // Reject incomplete headers.
+        // A partial header usually means the last write was interrupted.
         if (got != sizeof(header)) {
             return false;
         }
 
-        // Validate header.
+        // Check the file signature and version before reading the payload.
         if (std::memcmp(header, FILE_MAGIC, 4) != 0 ||
             get_u32(header + 4) != FILE_VERSION) {
 
@@ -549,7 +535,7 @@ bool WriteAheadLog::read_all() noexcept {
             return false;
         }
 
-        // Read payload.
+        // Read the payload belonging to this record.
         core::Array<core::u8> payload(arena_, payload_size);
 
         for (core::u32 i = 0; i < payload_size; ++i) {
@@ -563,7 +549,7 @@ bool WriteAheadLog::read_all() noexcept {
             payload.push_back(byte);
         }
 
-        // Verify checksum.
+        // Reject the record if its header or payload has been corrupted.
         if (checksum(header, payload.data(), payload.size()) !=
             get_u64(header + 13)) {
 
@@ -572,7 +558,7 @@ bool WriteAheadLog::read_all() noexcept {
 
 
         // ------------------------------------------
-        // ACK RECORD
+        // ACK records store the highest sequence confirmed by the server.
         // ------------------------------------------
 
         if (type == RECORD_ACK) {
@@ -596,10 +582,8 @@ bool WriteAheadLog::read_all() noexcept {
         }
 
 
-        // ------------------------------------------
-        // DATA RECORD
-        // ------------------------------------------
 
+        // DATA records contain compressed answer changes and their metadata.
         if (type != RECORD_DATA ||
             payload.size() < DATA_FIXED_SIZE + FREQUENCY_BYTES) {
 
@@ -639,7 +623,7 @@ bool WriteAheadLog::read_all() noexcept {
         pos += 8;
 
 
-        // Validate metadata and lengths.
+        // Check sequence order and make sure the stored lengths fit the payload.
         if (last_sequence_ == std::numeric_limits<core::u64>::max() ||
             sequence != last_sequence_ + 1 ||
             bit_length > std::numeric_limits<core::usize>::max() ||
@@ -652,7 +636,7 @@ bool WriteAheadLog::read_all() noexcept {
         }
 
 
-        // Construct the record directly inside the Arena.
+        // Recreate the record in the arena so it remains available after recovery.
         WalRecord* record = arena_.create<WalRecord>(arena_);
 
         if (!record) {
@@ -664,7 +648,7 @@ bool WriteAheadLog::read_all() noexcept {
         record->timestamp_ms = timestamp;
 
 
-        // Read Huffman frequency table.
+        // Restore the frequency table needed to rebuild the Huffman tree.
         core::u64 frequency_sum = 0;
 
         for (core::usize i = 0; i < 256; ++i) {
@@ -684,7 +668,7 @@ bool WriteAheadLog::read_all() noexcept {
         }
 
 
-        // Read compressed bytes.
+        // Copy the compressed bitstream from the file into the record.
         for (core::usize i = 0;
              i < static_cast<core::usize>(byte_count);
              ++i) {
@@ -693,7 +677,7 @@ bool WriteAheadLog::read_all() noexcept {
         }
 
 
-        // Set compressed metadata.
+        // Restore the information required by the decompressor.
         record->compressed.bit_length =
             static_cast<core::usize>(bit_length);
 
@@ -717,7 +701,7 @@ bool WriteAheadLog::read_all() noexcept {
         last_sequence_ = sequence;
     }
 
-    // Position file at the end for future appends.
+    // Leave the file pointer at the end so new records are appended after recovery.
     return std::fseek(file_, 0, SEEK_END) == 0;
 }
 

@@ -8,8 +8,10 @@ namespace sync_engine {
 
 namespace {
 
+// Counts how often each possible byte value appears in the input.
 using FrequencyMap = core::HashMap<core::u8, core::u32>;
 
+// A leaf represents one byte; an internal node combines two subtrees.
 struct HuffmanNode {
     core::u8 byte;
     core::u32 frequency;
@@ -22,6 +24,7 @@ struct HuffmanNode {
     }
 };
 
+// Bit pattern assigned to a byte, along with the number of valid bits.
 struct HuffmanCode {
     core::u64 bits;
     core::u32 length;
@@ -29,12 +32,14 @@ struct HuffmanCode {
 
 using CodeMap = core::HashMap<core::u8, HuffmanCode>;
 
+// Packed output bytes. bit_length tracks the final partially filled byte.
 struct EncodedBits {
     core::Array<core::u8> bytes;
     core::usize bit_length;
     bool valid;
 };
 
+// Write integers in big-endian order for a consistent serialized format.
 void write_u32(core::Array<core::u8>& out, core::u32 value) {
     out.push_back(static_cast<core::u8>(value >> 24));
     out.push_back(static_cast<core::u8>(value >> 16));
@@ -42,6 +47,7 @@ void write_u32(core::Array<core::u8>& out, core::u32 value) {
     out.push_back(static_cast<core::u8>(value));
 }
 
+// Read a big-endian integer; fail if fewer than four bytes remain.
 bool read_u32(const core::Array<core::u8>& in,
               core::usize& pos, core::u32& value) {
     if (pos > in.size() || in.size() - pos < 4) return false;
@@ -53,16 +59,20 @@ bool read_u32(const core::Array<core::u8>& in,
     return true;
 }
 
+// Min-heap used to select the two least-frequent nodes when building the tree.
+// A fixed array is sufficient because there are at most 256 byte values.
 class MinHeap {
     HuffmanNode* nodes_[256];
     core::usize count_;
 
+    // Use insertion order to break ties and keep tree construction deterministic.
     static bool less(const HuffmanNode* a, const HuffmanNode* b) {
         if (a->frequency != b->frequency)
             return a->frequency < b->frequency;
         return a->order < b->order;
     }
 
+    // Restore heap order after inserting a node.
     void sift_up(core::usize i) {
         while (i > 0) {
             core::usize p = (i - 1) / 2;
@@ -74,6 +84,7 @@ class MinHeap {
         }
     }
 
+    // Restore heap order after removing the smallest node.
     void sift_down(core::usize i) {
         while (true) {
             core::usize l = i * 2 + 1;
@@ -98,6 +109,7 @@ public:
 
     core::usize size() const { return count_; }
 
+    // Insert a node into the heap.
     bool push(HuffmanNode* node) {
         if (count_ >= 256) return false;
         nodes_[count_] = node;
@@ -106,6 +118,7 @@ public:
         return true;
     }
 
+    // Remove and return the node with the smallest frequency.
     HuffmanNode* pop() {
         if (count_ == 0) return nullptr;
         HuffmanNode* result = nodes_[0];
@@ -118,6 +131,7 @@ public:
     }
 };
 
+// Count the occurrences of every byte in the input data.
 void count_frequencies(
     FrequencyMap& frequencies,
     const core::u8* data,
@@ -129,6 +143,8 @@ void count_frequencies(
     }
 }
 
+// Build the Huffman tree by repeatedly merging the two least-frequent nodes.
+// All nodes are allocated from the supplied arena.
 HuffmanNode* build_tree(core::Arena& arena,
                         const FrequencyMap& frequencies) {
     MinHeap heap;
@@ -178,7 +194,8 @@ HuffmanNode* build_tree(core::Arena& arena,
     return heap.pop();
 }
 
-// This implementation supports Huffman codes up to 64 bits.
+// Walk the tree to assign a bit pattern to each byte: left = 0, right = 1.
+// This implementation supports Huffman codes up to 64 bits.// This implementation supports Huffman codes up to 64 bits.
 void make_codes(const HuffmanNode* node, core::u64 bits,
                 core::u32 length, CodeMap& codes, bool& valid) {
     if (!node || !valid) return;
@@ -199,6 +216,8 @@ void make_codes(const HuffmanNode* node, core::u64 bits,
                length + 1, codes, valid);
 }
 
+// Replace each input byte with its Huffman code and pack the bits into bytes.
+// Bits are written most-significant bit first.
 EncodedBits encode(core::Arena& arena, const core::u8* input,
                    core::usize length, const CodeMap& codes) {
     EncodedBits result{core::Array<core::u8>(arena), 0, false};
@@ -236,6 +255,8 @@ EncodedBits encode(core::Arena& arena, const core::u8* input,
     return result;
 }
 
+// Decode the packed bits by walking the Huffman tree back to its leaves.
+// original_size is used to reject incomplete or malformed encoded data.
 core::Array<core::u8> decode(
     core::Arena& arena,
     const EncodedBits& encoded,
@@ -285,6 +306,7 @@ core::Array<core::u8> decode(
     return output;
 }
 
+// Compare two StringViews by length and contents; neither needs a null terminator.
 bool same_text(core::StringView a, core::StringView b) {
     if (a.size() != b.size()) return false;
     for (core::usize i = 0; i < a.size(); ++i)
@@ -294,6 +316,8 @@ bool same_text(core::StringView a, core::StringView b) {
 
 } // namespace
 
+// Add a delta only if the answer changed. Keep both old and new text
+// so an update can be checked before it is applied.
 void generate_text_delta(core::u32 answer_id,
                          core::StringView old_value,
                          core::StringView new_value,
@@ -302,6 +326,8 @@ void generate_text_delta(core::u32 answer_id,
         deltas.push_back({answer_id, old_value, new_value});
 }
 
+// Convert deltas to bytes before compression. Each record stores:
+// answer ID, old-text length and bytes, then new-text length and bytes.
 bool serialize_text_delta(const TextDeltaArray& deltas,
                           core::Array<core::u8>& output) {
     // Check lengths before writing anything.
@@ -331,6 +357,8 @@ bool serialize_text_delta(const TextDeltaArray& deltas,
     return true;
 }
 
+// Serialize the deltas, build a Huffman tree, and compress the byte stream.
+// Save the frequency table so decompression can rebuild the same tree.
 CompressedTextDelta compress_text_delta(
     core::Arena& arena,
     const TextDeltaArray& deltas
@@ -385,6 +413,8 @@ CompressedTextDelta compress_text_delta(
     return result;
 }
 
+// Rebuild the Huffman tree from the saved frequencies, decode the stream,
+// then parse the byte stream back into TextDelta records.
 TextDeltaArray decompress_text_delta(
     core::Arena& arena,
     const CompressedTextDelta& compressed,
@@ -445,7 +475,8 @@ TextDeltaArray decompress_text_delta(
     core::Array<ParsedDelta> parsed(arena);
     core::usize pos = 0;
 
-    // Parse and validate the entire buffer first.
+    // Validate every record before creating StringViews, so invalid input
+    // cannot produce a partially decoded result.    // Parse and validate the entire buffer first.
     for (core::usize i = 0; i < compressed.delta_count; ++i) {
         core::u32 id = 0, old_len = 0, new_len = 0;
 
@@ -472,7 +503,8 @@ TextDeltaArray decompress_text_delta(
 
     if (pos != raw.size()) return TextDeltaArray(arena);
 
-    // Copy strings into caller-owned storage so returned views remain valid.
+    // StringView does not own its characters. Copy them into caller-owned
+    // storage so the returned views remain valid after this function returns.    // Copy strings into caller-owned storage so returned views remain valid.
     core::usize start = text_storage.size();
 
     for (core::usize i = 0; i < parsed.size(); ++i) {
@@ -507,6 +539,8 @@ TextDeltaArray decompress_text_delta(
     return result;
 }
 
+// Apply an update only if the current text matches the deltaâ€™s old value.
+// This prevents applying a change to an unexpected version of an answer.
 bool apply_text_delta(core::StringView current_value,
                       const TextDelta& delta,
                       core::Array<core::u8>& output) {
