@@ -53,7 +53,7 @@ namespace core {
 
             void refill () noexcept {
                 while (bit_count_ <= 56 && byte_pos_ < byte_size_) {
-                    bit_accum_ |= (static_cast<u64> (data_[byte_pos_++]) << bit_count_);  /// lol
+                    bit_accum_ |= (static_cast<u64> (data_[byte_pos_++]) << bit_count_); /// lol
                     bit_count_ += 8;
                 }
             }

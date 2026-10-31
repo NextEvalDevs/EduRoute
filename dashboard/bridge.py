@@ -152,6 +152,24 @@ _lib.eduroute_get_collusion_edges.restype = ctypes.c_size_t
 _lib.eduroute_get_arena_Memory_used.argtypes = [ctypes.c_void_p]
 _lib.eduroute_get_arena_Memory_used.restype = ctypes.c_size_t
 
+# size_t eduroute_get_dag_node_count (const EduRouteEngine *engine);
+_lib.eduroute_get_dag_node_count.argtypes = [ctypes.c_void_p]
+_lib.eduroute_get_dag_node_count.restype = ctypes.c_size_t
+
+# int eduroute_get_dag_latest (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+#                              uint64_t *out_parent_hash, uint64_t *out_node_hash,
+#                              char *out_answer_buf, size_t buf_cap, size_t *out_answer_len);
+_lib.eduroute_get_dag_latest.argtypes = [
+    ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint16,
+    ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64),
+    ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)
+]
+_lib.eduroute_get_dag_latest.restype = ctypes.c_int
+
+# size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id);
+_lib.eduroute_get_dag_history_size.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint16]
+_lib.eduroute_get_dag_history_size.restype = ctypes.c_size_t
+
 # -----------------------------------------------------------------------------
 # 4. EduRouteBridge Wrapper Class
 # -----------------------------------------------------------------------------
@@ -304,3 +322,52 @@ class EduRouteBridge:
                 "used_kb": round(used / 1024, 2),
                 "used_mb": round(used / (1024 * 1024), 2),
             }
+
+    def get_dag_node_count(self) -> int:
+        """Queries the total number of DAG nodes recorded in the C++ engine."""
+        with self._lock:
+            if not self._engine:
+                return 0
+            return int(_lib.eduroute_get_dag_node_count(self._engine))
+
+    def get_dag_latest(self, student_id: int, question_id: int) -> Optional[Dict]:
+        """Queries the latest answer and node hash for a given student and question."""
+        with self._lock:
+            if not self._engine:
+                return None
+            parent_hash = ctypes.c_uint64(0)
+            node_hash = ctypes.c_uint64(0)
+            buf_cap = 65536
+            buf = ctypes.create_string_buffer(buf_cap)
+            answer_len = ctypes.c_size_t(0)
+            ok = _lib.eduroute_get_dag_latest(
+                self._engine,
+                ctypes.c_uint32(student_id),
+                ctypes.c_uint16(question_id),
+                ctypes.byref(parent_hash),
+                ctypes.byref(node_hash),
+                buf,
+                ctypes.c_size_t(buf_cap),
+                ctypes.byref(answer_len)
+            )
+            if not ok:
+                return None
+            return {
+                "student_id": student_id,
+                "question_id": question_id,
+                "parent_hash": int(parent_hash.value),
+                "node_hash": int(node_hash.value),
+                "answer": buf.value.decode("utf-8", errors="replace"),
+                "answer_len": int(answer_len.value),
+            }
+
+    def get_dag_history_size(self, student_id: int, question_id: int) -> int:
+        """Queries the number of retained history snapshots for a student and question."""
+        with self._lock:
+            if not self._engine:
+                return 0
+            return int(_lib.eduroute_get_dag_history_size(
+                self._engine,
+                ctypes.c_uint32(student_id),
+                ctypes.c_uint16(question_id)
+            ))

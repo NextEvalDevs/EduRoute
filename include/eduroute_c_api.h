@@ -11,7 +11,7 @@ extern "C" {
 typedef struct EduRouteEngine EduRouteEngine;
 
 // -----------------------------------------------------------------------------
-// 1. Wire Packet Header (32 Bytes, Packed, Zero Padding)
+// Wire Packet Header (32 Bytes, Packed, Zero Padding)
 // -----------------------------------------------------------------------------
 #pragma pack(push, 1)
 typedef struct EduWireHeader {
@@ -28,7 +28,7 @@ typedef struct EduWireHeader {
 #pragma pack(pop)
 
 // -----------------------------------------------------------------------------
-// 2. Synchronous Response Returned on Every Packet Ingest (24 Bytes)
+// Synchronous Response Returned on Every Packet Ingest (24 Bytes)
 // -----------------------------------------------------------------------------
 typedef struct EduIngestResult {
         uint8_t status_code;       // 0 = Ok (matches eduroute::StatusCode)
@@ -42,7 +42,7 @@ typedef struct EduIngestResult {
 } EduIngestResult;
 
 // -----------------------------------------------------------------------------
-// 3. Export Structs for Python Flask Dashboard (Leaderboard & Collusion Graph)
+// Export Structs for Python Flask Dashboard (Leaderboard & Collusion Graph)
 // -----------------------------------------------------------------------------
 typedef struct EduLeaderboardRow {
         uint32_t rank;
@@ -66,7 +66,7 @@ typedef struct EduCollusionEdge {
 } EduCollusionEdge;
 
 // -----------------------------------------------------------------------------
-// 4. Lifecycle & Setup API
+// Lifecycle & Setup API
 // -----------------------------------------------------------------------------
 EduRouteEngine *eduroute_create (uint32_t max_students, uint32_t max_questions, const char *wal_filepath);
 
@@ -78,7 +78,7 @@ void eduroute_register_question (EduRouteEngine *engine, uint16_t question_id, u
                                  uint32_t expected_time_ms, uint8_t correct_mcq_option);
 
 // -----------------------------------------------------------------------------
-// 5. Core Hot-Path API (Div 1 -> Div 2 -> Div 3)
+// Core Hot-Path API (Div 1 -> Div 2 -> Div 3)
 // -----------------------------------------------------------------------------
 
 // Helper for clients/simulator: packs & encrypts a delta into a raw wire frame
@@ -92,13 +92,26 @@ EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const uint8_t *w
                                         uint64_t server_recv_ms);
 
 // -----------------------------------------------------------------------------
-// 6. Telemetry & Dashboard Query API
+// Telemetry & Dashboard Query API
 // -----------------------------------------------------------------------------
 size_t eduroute_get_top_k (EduRouteEngine *engine, EduLeaderboardRow *out_rows, size_t k);
 
 size_t eduroute_get_collusion_edges (EduRouteEngine *engine, EduCollusionEdge *out_edges, size_t max_edges);
 
 size_t eduroute_get_arena_Memory_used (const EduRouteEngine *engine);
+
+// -----------------------------------------------------------------------------
+// Sync Engine & Merkle DAG API (Division 1)
+// -----------------------------------------------------------------------------
+
+// returns the DAG Node Count in the engine DAG
+size_t eduroute_get_dag_node_count (const EduRouteEngine *engine);
+
+int eduroute_get_dag_latest (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+                             uint64_t *out_parent_hash, uint64_t *out_node_hash, char *out_answer_buf, size_t buf_cap,
+                             size_t *out_answer_len);
+
+size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id);
 
 #ifdef __cplusplus
 }
