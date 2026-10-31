@@ -1,3 +1,30 @@
+/*
+ * Eduroute -- An Adaptive Exam & Integrity Engine
+ *  The main user workflow is a student submitting an answer through the dashboard,
+ *  which passes submissions to the engine and displays the returned next question,
+ *  score, rank, and integrity status. Internally, the C ABI coordinates adaptive ranking,
+ *  anti-cheat analysis, and synchronization facilities, supported by arena-backed core structures.
+ *
+ * Copyright (C) 2026 Team NextEval @ NITT
+ * Authors:
+ *   Raj <106125091@nitt.edu>
+ *   Raswanth <raswanthvenkatesan2007@gmail.com>
+ *   Rithimoni <rithimonisubaramanian@gmail.com>
+ *
+ * Eduroute is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #pragma once
 
 #include <stddef.h>

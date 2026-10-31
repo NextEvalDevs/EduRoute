@@ -14,7 +14,6 @@ else
     exit 1
 fi
 
-# If libeduroute.so was built with ASan, automatically find and preload libasan
 if nm -D "$DIR/libeduroute.so" 2>/dev/null | grep -q "__asan_init"; then
     LIBASAN=$(gcc -print-file-name=libasan.so 2>/dev/null || true)
     if [ -f "$LIBASAN" ]; then
