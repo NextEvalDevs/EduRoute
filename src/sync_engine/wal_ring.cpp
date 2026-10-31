@@ -6,9 +6,7 @@
 namespace sync_engine {
     namespace {
 
-        // --------------------------------------------------
-        // WAL FILE FORMAT
-        // --------------------------------------------------
+        // The file stores a header followed by DATA or ACK records
 
         constexpr core::u8 FILE_MAGIC[4] = {0x7f, 'C', 'A', 'T'};
 
@@ -17,18 +15,10 @@ namespace sync_engine {
         constexpr core::u8 RECORD_DATA = 1;
         constexpr core::u8 RECORD_ACK  = 2;
 
-        // Header:
-        // magic[4] + version[4] + type[1] + payload_size[4] + checksum[8]
+        // Each record header identifies the format, record type, payload size and checksum
         constexpr core::usize HEADER_SIZE = 21;
 
-        // DATA payload:
-        // sequence[8]
-        // student_id[4]
-        // timestamp[8]
-        // bit_length[8]
-        // original_size[8]
-        // delta_count[8]
-        // byte_count[8]
+        // A DATA payload stores the record metadata, frequency table and compressed bytes
         constexpr core::usize DATA_FIXED_SIZE = 52;
 
         constexpr core::usize FREQUENCY_BYTES = 256 * 4;
@@ -36,19 +26,19 @@ namespace sync_engine {
         constexpr core::u32 MAX_COMPRESSED_BYTES = 64u * 1024u * 1024u;
 
 
-        // --------------------------------------------------
-        // INTEGER SERIALIZATION
-        // Little-endian format
-        // --------------------------------------------------
+        // Integers are written and read in little-endian byte order
 
+        // Write a 32-bit value one byte at a time
         void put_u32 (core::u8 *out, core::u32 value) noexcept {
             for (core::usize i = 0; i < 4; ++i) { out[i] = static_cast<core::u8> (value >> (i * 8)); }
         }
 
+        // Write a 64-bit value using the same byte order
         void put_u64 (core::u8 *out, core::u64 value) noexcept {
             for (core::usize i = 0; i < 8; ++i) { out[i] = static_cast<core::u8> (value >> (i * 8)); }
         }
 
+        // Rebuild a 32-bit value from four little-endian bytes
         core::u32 get_u32 (const core::u8 *in) noexcept {
             core::u32 value = 0;
 
@@ -57,6 +47,7 @@ namespace sync_engine {
             return value;
         }
 
+        // Rebuild a 64-bit value from eight little-endian bytes
         core::u64 get_u64 (const core::u8 *in) noexcept {
             core::u64 value = 0;
 
@@ -66,10 +57,9 @@ namespace sync_engine {
         }
 
 
-        // --------------------------------------------------
-        // CHECKSUM
-        // --------------------------------------------------
+        // The checksum covers the record header fields and its payload
 
+        // Combine hashes of the record header fields and payload for corruption checks
         core::Hash64 checksum (const core::u8 *header_prefix, const core::u8 *payload,
                                core::usize payload_size) noexcept {
 
@@ -81,16 +71,16 @@ namespace sync_engine {
         }
 
 
-        // --------------------------------------------------
-        // FILE HELPERS
-        // --------------------------------------------------
+        // Helpers for reading and writing complete records
 
+        // Treat a short read as a failure instead of using incomplete data
         bool read_exact (std::FILE *file, void *destination, core::usize size) noexcept {
 
             return size == 0 || std::fread (destination, 1, size, file) == size;
         }
 
 
+        // Build the record header, write its payload and flush it to disk
         bool write_record (std::FILE *file, core::u8 type, const core::u8 *payload, core::u32 payload_size) noexcept {
 
             core::u8 header[HEADER_SIZE]{};
@@ -114,11 +104,7 @@ namespace sync_engine {
             return std::fflush (file) == 0;
         }
 
-
-        // --------------------------------------------------
-        // COMPRESSED DATA VALIDATION
-        // --------------------------------------------------
-
+        // Check the compressed fields before storing or recovering a WAL record
         bool validate_compressed (const CompressedTextDelta &value) noexcept {
 
             if (!value.valid) { return false; }
@@ -141,9 +127,7 @@ namespace sync_engine {
     } // namespace
 
 
-    // ==================================================
-    // CONSTRUCTOR / DESTRUCTOR
-    // ==================================================
+    // Set up the WAL state and close the file when the object is destroyed
 
     WriteAheadLog::WriteAheadLog (core::Arena &arena) noexcept :
         arena_ (arena), records_ (arena, 16), file_ (nullptr), acknowledged_sequence_ (0), last_sequence_ (0) {}
@@ -152,9 +136,7 @@ namespace sync_engine {
     WriteAheadLog::~WriteAheadLog () { close (); }
 
 
-    // ==================================================
-    // OPEN
-    // ==================================================
+    // Open the WAL file and rebuild its in-memory state from saved records
 
     bool WriteAheadLog::open (const char *filepath) {
 
@@ -180,9 +162,7 @@ namespace sync_engine {
     }
 
 
-    // ==================================================
-    // CLOSE
-    // ==================================================
+    // Flush and close the file if it is currently open
 
     void WriteAheadLog::close () noexcept {
 
@@ -197,9 +177,7 @@ namespace sync_engine {
     bool WriteAheadLog::is_open () const noexcept { return file_ != nullptr; }
 
 
-    // ==================================================
-    // COPY COMPRESSED DATA
-    // ==================================================
+    // Copy compressed data into storage owned by this WAL
 
     bool WriteAheadLog::copy_compressed (const CompressedTextDelta &source, CompressedTextDelta &destination) noexcept {
 
@@ -221,9 +199,7 @@ namespace sync_engine {
     }
 
 
-    // ==================================================
-    // APPEND
-    // ==================================================
+    // Add a new DATA record to the WAL and persist it before updating memory
 
     bool WriteAheadLog::append (core::StudentId student_id, core::TimestampMs timestamp_ms,
                                 const CompressedTextDelta &compressed, core::u64 *out_sequence) {
@@ -234,12 +210,12 @@ namespace sync_engine {
 
         const core::u64 sequence = last_sequence_ + 1;
 
-        // Calculate payload size.
+        // Work out the bytes needed for metadata, frequencies and compressed data
         const core::usize payload_size = DATA_FIXED_SIZE + FREQUENCY_BYTES + compressed.bytes.size ();
 
         if (payload_size > std::numeric_limits<core::u32>::max ()) { return false; }
 
-        // Build serialized payload.
+        // Serialize the record fields in the same order used by recovery
         core::Array<core::u8> payload (arena_, payload_size);
 
         auto push_u32 = [&payload] (core::u32 value) {
@@ -253,7 +229,7 @@ namespace sync_engine {
             for (core::usize i = 0; i < 8; ++i) { payload.push_back (static_cast<core::u8> (value >> (i * 8))); }
         };
 
-        // Fixed metadata.
+        // Store the sequence number, student, timestamp and compression sizes
         push_u64 (sequence);
         push_u32 (student_id);
         push_u64 (timestamp_ms);
@@ -263,15 +239,15 @@ namespace sync_engine {
         push_u64 (static_cast<core::u64> (compressed.delta_count));
         push_u64 (static_cast<core::u64> (compressed.bytes.size ()));
 
-        // Huffman frequency table.
+        // Save all 256 byte frequencies so the data can be decompressed later
         for (core::usize i = 0; i < 256; ++i) { push_u32 (compressed.frequencies[i]); }
 
-        // Compressed bytes.
+        // Append the actual Huffman-encoded data
         for (core::usize i = 0; i < compressed.bytes.size (); ++i) { payload.push_back (compressed.bytes[i]); }
 
         if (payload.size () != payload_size) { return false; }
 
-        // Allocate and construct the in-memory record.
+        // Prepare the in-memory record that will represent this WAL entry
         WalRecord *record = arena_.create<WalRecord> (arena_);
 
         if (!record) { return false; }
@@ -282,7 +258,7 @@ namespace sync_engine {
 
         if (!copy_compressed (compressed, record->compressed)) { return false; }
 
-        // Persist before making the record visible in memory.
+        // Write the record to disk first; only then add it to the in-memory list
         if (!write_record (file_, RECORD_DATA, payload.data (), static_cast<core::u32> (payload.size ()))) {
 
             return false;
@@ -297,11 +273,7 @@ namespace sync_engine {
         return true;
     }
 
-
-    // ==================================================
-    // PEEK NEXT
-    // ==================================================
-
+    // Find the next unsynced record without removing it from the WAL
     bool WriteAheadLog::peek_next (const WalRecord *&out) const noexcept {
 
         out = nullptr;
@@ -318,9 +290,7 @@ namespace sync_engine {
     }
 
 
-    // ==================================================
-    // ACKNOWLEDGE
-    // ==================================================
+    // Persist an ACK record and advance the acknowledged sequence
 
     bool WriteAheadLog::acknowledge (core::u64 sequence) {
 
@@ -340,10 +310,7 @@ namespace sync_engine {
     }
 
 
-    // ==================================================
-    // PENDING COUNT
-    // ==================================================
-
+    // Count every record with a sequence number beyond the ACK position
     core::usize WriteAheadLog::pending_count () const noexcept {
 
         core::usize count = 0;
@@ -357,9 +324,7 @@ namespace sync_engine {
     }
 
 
-    // ==================================================
-    // SEQUENCE GETTERS
-    // ==================================================
+    // Return the latest acknowledged and appended sequence numbers
 
     core::u64 WriteAheadLog::acknowledged_sequence () const noexcept { return acknowledged_sequence_; }
 
@@ -367,9 +332,7 @@ namespace sync_engine {
     core::u64 WriteAheadLog::last_sequence () const noexcept { return last_sequence_; }
 
 
-    // ==================================================
-    // RECOVERY
-    // ==================================================
+    // Read the WAL from disk and restore its records and acknowledgement state
 
     bool WriteAheadLog::read_all () noexcept {
 
@@ -383,13 +346,13 @@ namespace sync_engine {
 
             const core::usize got = std::fread (header, 1, sizeof (header), file_);
 
-            // Normal end of file.
+            // Reaching EOF between records is the normal stopping condition
             if (got == 0 && std::feof (file_)) { break; }
 
-            // Reject incomplete headers.
+            // A partial header means the WAL record is incomplete
             if (got != sizeof (header)) { return false; }
 
-            // Validate header.
+            // Check the file signature and version before reading the payload
             if (std::memcmp (header, FILE_MAGIC, 4) != 0 || get_u32 (header + 4) != FILE_VERSION) { return false; }
 
             const core::u8 type = header[8];
@@ -398,7 +361,7 @@ namespace sync_engine {
 
             if (payload_size > MAX_COMPRESSED_BYTES + DATA_FIXED_SIZE + FREQUENCY_BYTES) { return false; }
 
-            // Read payload.
+            // Read the full payload before validating or processing the record
             core::Array<core::u8> payload (arena_, payload_size);
 
             for (core::u32 i = 0; i < payload_size; ++i) {
@@ -410,13 +373,11 @@ namespace sync_engine {
                 payload.push_back (byte);
             }
 
-            // Verify checksum.
+            // Reject the record if its contents do not match the saved checksum
             if (checksum (header, payload.data (), payload.size ()) != get_u64 (header + 13)) { return false; }
 
 
-            // ------------------------------------------
-            // ACK RECORD
-            // ------------------------------------------
+            // ACK records update which sequence numbers have already been synced
 
             if (type == RECORD_ACK) {
 
@@ -432,9 +393,7 @@ namespace sync_engine {
             }
 
 
-            // ------------------------------------------
-            // DATA RECORD
-            // ------------------------------------------
+            // DATA records contain the compressed answer changes
 
             if (type != RECORD_DATA || payload.size () < DATA_FIXED_SIZE + FREQUENCY_BYTES) { return false; }
 
@@ -464,7 +423,7 @@ namespace sync_engine {
             pos += 8;
 
 
-            // Validate metadata and lengths.
+            // Check sequence order and make sure all stored sizes fit the payload
             if (last_sequence_ == std::numeric_limits<core::u64>::max () || sequence != last_sequence_ + 1 ||
                 bit_length > std::numeric_limits<core::usize>::max () ||
                 original_size > std::numeric_limits<core::usize>::max () ||
@@ -475,7 +434,7 @@ namespace sync_engine {
             }
 
 
-            // Construct the record directly inside the Arena.
+            // Allocate the recovered record in the WAL's Arena
             WalRecord *record = arena_.create<WalRecord> (arena_);
 
             if (!record) { return false; }
@@ -485,7 +444,7 @@ namespace sync_engine {
             record->timestamp_ms = timestamp;
 
 
-            // Read Huffman frequency table.
+            // Restore the frequency table needed to rebuild the Huffman tree
             core::u64 frequency_sum = 0;
 
             for (core::usize i = 0; i < 256; ++i) {
@@ -502,14 +461,14 @@ namespace sync_engine {
             if (frequency_sum != original_size) { return false; }
 
 
-            // Read compressed bytes.
+            // Copy the encoded data into the record
             for (core::usize i = 0; i < static_cast<core::usize> (byte_count); ++i) {
 
                 record->compressed.bytes.push_back (p[pos + i]);
             }
 
 
-            // Set compressed metadata.
+            // Restore the sizes and mark the compressed data as valid
             record->compressed.bit_length = static_cast<core::usize> (bit_length);
 
             record->compressed.original_size = static_cast<core::usize> (original_size);
@@ -526,7 +485,7 @@ namespace sync_engine {
             last_sequence_ = sequence;
         }
 
-        // Position file at the end for future appends.
+        // Leave the file at the end so the next append is written after recovery
         return std::fseek (file_, 0, SEEK_END) == 0;
     }
 
