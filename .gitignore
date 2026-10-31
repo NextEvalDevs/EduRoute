@@ -6,4 +6,5 @@
 .aicont
 /dashboard/libeduroute.so
 /dashboard/eduroute_wal.bin
+/dashboard/eduroute_wal.bin.dag
 **/__pycache__/

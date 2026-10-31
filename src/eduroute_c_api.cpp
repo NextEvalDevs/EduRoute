@@ -18,6 +18,9 @@ namespace adaptive_rank {
 #include "core/dyn_array.hpp"
 #include "core/hash_map.hpp"
 #include "core/types.hpp"
+#include "sync_engine/huffman_delta.hpp"
+#include "sync_engine/merkle_dag.hpp"
+#include "sync_engine/wal_ring.hpp"
 
 // ============================================================================
 //  Internal per-student state (stored in the persistent arena)
@@ -41,6 +44,9 @@ struct EduRouteEngine {
         core::Arena pers_arena;    // persistent: lives for the whole exam
         core::Arena scratch_arena; // scratch: reset after each packet
 
+        // --- Div 1: Sync Engine ---------------------------------------------------
+        sync_engine::MerkleDAG merkle_dag;
+
         // --- Div 3: Adaptive Ranking ----------------------------------------------
         adaptive_rank::QuestionBank question_bank;
         adaptive_rank::FenwickScore fenwick;
@@ -62,10 +68,15 @@ struct EduRouteEngine {
         // Constructor: forward to the two arenas
         EduRouteEngine (core::usize pers_bytes, core::usize scratch_bytes, core::u32 max_s, core::u32 max_q,
                         const char *wal_path) :
-            pers_arena (pers_bytes), scratch_arena (scratch_bytes), kmer (pers_arena, 32768u), max_students (max_s),
-            max_questions (max_q), wal_fp (nullptr) {
+            pers_arena (pers_bytes), scratch_arena (scratch_bytes), merkle_dag (pers_arena), kmer (pers_arena, 32768u),
+            max_students (max_s), max_questions (max_q), wal_fp (nullptr) {
             students = nullptr;
-            if (wal_path && wal_path[0] != '\0') { wal_fp = std::fopen (wal_path, "ab"); }
+            if (wal_path && wal_path[0] != '\0') {
+                wal_fp = std::fopen (wal_path, "ab");
+                char dag_path[512];
+                std::snprintf (dag_path, sizeof (dag_path), "%s.dag", wal_path);
+                merkle_dag.open (dag_path);
+            }
         }
 
         ~EduRouteEngine () {
@@ -73,6 +84,7 @@ struct EduRouteEngine {
                 std::fclose (wal_fp);
                 wal_fp = nullptr;
             }
+            merkle_dag.close ();
         }
 };
 
@@ -318,15 +330,32 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
     // ---- 3. WAL append (raw frame) ------------------------------------------
     if (engine->wal_fp) { std::fwrite (wire_packet, 1u, sizeof (EduWireHeader) + payload_len, engine->wal_fp); }
 
+    const auto action = static_cast<core::ActionType> (hdr.action_type);
+
+    // ---- 3b. Merkle DAG append ----------------------------------------------
+    {
+        core::StringView dag_answer;
+        char mcq_str[2] = {0, 0};
+        if (action == core::ActionType::McqSelect) {
+            if (hdr.mcq_option < 4) {
+                mcq_str[0] = static_cast<char> ('A' + hdr.mcq_option);
+                dag_answer = core::StringView (mcq_str, 1);
+            }
+        } else if (payload_len > 0) {
+            dag_answer =
+                    core::StringView (reinterpret_cast<const char *> (payload), static_cast<core::usize> (payload_len));
+        }
+        engine->merkle_dag.append (sid, qid, hdr.monotonic_dt_ms, dag_answer, nullptr);
+    }
+
     // ---- 4. Reset scratch arena ---------------------------------------------
     engine->scratch_arena.reset ();
-
-    const auto action = static_cast<core::ActionType> (hdr.action_type);
 
     // ---- 5. Ensure the student has an active ExamSession -------------------
     if (st.session == nullptr && engine->question_bank.ready () && engine->question_bank.size () > 0u) {
         // Allocate the ExamSession object in the persistent arena.
-        void *sess_mem = engine->pers_arena.allocate (sizeof (adaptive_rank::ExamSession), alignof (adaptive_rank::ExamSession));
+        void *sess_mem =
+                engine->pers_arena.allocate (sizeof (adaptive_rank::ExamSession), alignof (adaptive_rank::ExamSession));
         if (sess_mem) {
             auto *sess = ::new (sess_mem) adaptive_rank::ExamSession ();
             adaptive_rank::SelectorConfig cfg{};
@@ -523,4 +552,40 @@ extern "C" size_t eduroute_get_collusion_edges (EduRouteEngine *engine, EduCollu
 extern "C" size_t eduroute_get_arena_Memory_used (const EduRouteEngine *engine) {
     if (!engine) return 0u;
     return engine->pers_arena.used () + engine->scratch_arena.used ();
+}
+
+// ============================================================================
+//  Sync Engine & Merkle DAG Inspection APIs (Division 1)
+// ============================================================================
+
+extern "C" size_t eduroute_get_dag_node_count (const EduRouteEngine *engine) {
+    if (!engine) return 0u;
+    return engine->merkle_dag.node_count ();
+}
+
+extern "C" int eduroute_get_dag_latest (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+                                        uint64_t *out_parent_hash, uint64_t *out_node_hash, char *out_answer_buf,
+                                        size_t buf_cap, size_t *out_answer_len) {
+    if (!engine) return 0;
+    sync_engine::MerkleNode node{};
+    if (!engine->merkle_dag.latest (static_cast<core::StudentId> (student_id),
+                                    static_cast<core::QuestionId> (question_id), node)) {
+        return 0;
+    }
+    if (out_parent_hash) *out_parent_hash = node.parent_hash;
+    if (out_node_hash) *out_node_hash = node.node_hash;
+    if (out_answer_len) *out_answer_len = node.answer.size ();
+    if (out_answer_buf && buf_cap > 0) {
+        const core::usize to_copy = node.answer.size () < buf_cap ? node.answer.size () : buf_cap - 1;
+        if (node.answer.data () && to_copy > 0) { std::memcpy (out_answer_buf, node.answer.data (), to_copy); }
+        out_answer_buf[to_copy] = '\0';
+    }
+    return 1;
+}
+
+extern "C" size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, uint32_t student_id,
+                                                 uint16_t question_id) {
+    if (!engine) return 0u;
+    return engine->merkle_dag.history_size (static_cast<core::StudentId> (student_id),
+                                            static_cast<core::QuestionId> (question_id));
 }
