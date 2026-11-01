@@ -24,6 +24,12 @@
     </div>
 </div>
 
+{% if notice %}
+<div class="alert alert-success">
+    <strong>Success:</strong> {{ notice }}
+</div>
+{% endif %}
+
 <!-- Telemetry Summary Cards -->
 <div class="stats-grid">
     <div class="stat-box">
@@ -37,30 +43,129 @@
         <div class="stat-lbl">Confirmed Collusions</div>
     </div>
     <div class="stat-box">
-        <div class="stat-val">{{ mem.used_kb }} KB</div>
-        <div class="stat-lbl">Arena Memory Used</div>
+        <div class="stat-val" style="color: #0f766e;">{{ comp_stats.savings_pct }}%</div>
+        <div class="stat-lbl">Huffman Savings</div>
     </div>
     <div class="stat-box">
-        <div class="stat-val">{{ bank_size }}</div>
-        <div class="stat-lbl">Questions in Bank</div>
+        <div class="stat-val">{{ wal_stats.last_sequence }}</div>
+        <div class="stat-lbl">WAL Disk Seq</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-val">{{ dag_nodes }}</div>
+        <div class="stat-lbl">DAG Revisions</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-val">{{ mem.used_kb }} KB</div>
+        <div class="stat-lbl">Arena Memory Used</div>
     </div>
 </div>
 
 <!-- Simulation / Demonstration Panel -->
 <div class="card" style="background: #fdf2f8; border-color: #fbcfe8;">
-    <h3 style="margin-top: 0; color: #9d174d;">Interactive Engine Demonstrator</h3>
+    <h3 style="margin-top: 0; color: #9d174d;">Interactive Engine & Resilience Demonstrator</h3>
     <p style="font-size: 0.85rem; color: #701a75; margin-bottom: 10px;">
-        Use these quick buttons to simulate incoming wire packets and test the C++ ABI in real-time:
+        Test and simulate real-time engine features including collusion detection, student load, offline internet disconnect recovery, and WAL disk replay:
     </p>
     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
         <form action="/api/simulate_collusion" method="POST" style="margin: 0;">
             <button type="submit" class="btn btn-sm btn-danger">Simulate Cheating Ring (Students #10 & #11)</button>
         </form>
         <form action="/api/simulate_students" method="POST" style="margin: 0;">
-            <button type="submit" class="btn btn-sm" style="background: #2563eb;">Simulate 5 Random Legitimate Students</button>
+            <button type="submit" class="btn btn-sm" style="background: #2563eb;">Simulate 5 Random Students</button>
+        </form>
+        <form action="/api/simulate_offline_sync" method="POST" style="margin: 0;">
+            <button type="submit" class="btn btn-sm" style="background: #0f766e;">Simulate Offline Disconnect & Disk Recovery (#99)</button>
+        </form>
+        <form action="/api/simulate_wal_restart" method="POST" style="margin: 0;">
+            <button type="submit" class="btn btn-sm" style="background: #7c3aed;">Simulate Server Crash & WAL Replay</button>
         </form>
     </div>
 </div>
+
+<!-- Div 1: Sync Engine, Huffman Delta Compression & Disk Recovery Section -->
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <h2>Div 1: Sync Engine, Huffman Delta Compression & Disk Recovery</h2>
+        <div>
+            <span class="badge badge-blue">WAL: {{ wal_stats.last_sequence }} Records</span>
+            <span class="badge badge-green">{{ comp_stats.savings_pct }}% Space Saved</span>
+            {% if wal_stats.pending_count > 0 %}
+                <span class="badge badge-yellow">Pending Disk Recovery: {{ wal_stats.pending_count }}</span>
+            {% else %}
+                <span class="badge badge-green">WAL 100% Synced</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px;">
+        <div style="background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
+            <div style="font-size: 0.8rem; color: #64748b; text-transform: uppercase;">Uncompressed Payload</div>
+            <div style="font-size: 1.2rem; font-weight: bold; color: #1e3a8a;">{{ comp_stats.total_orig_bytes }} bytes</div>
+            <div style="font-size: 0.75rem; color: #64748b;">Raw answers received across {{ comp_stats.total_deltas }} deltas</div>
+        </div>
+        <div style="background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
+            <div style="font-size: 0.8rem; color: #64748b; text-transform: uppercase;">Huffman Compressed Payload</div>
+            <div style="font-size: 1.2rem; font-weight: bold; color: #0f766e;">{{ comp_stats.total_comp_bytes }} bytes</div>
+            <div style="font-size: 0.75rem; color: #0f766e;">Net Bandwidth Saved: {{ comp_stats.savings_pct }}%</div>
+        </div>
+        <div style="background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
+            <div style="font-size: 0.8rem; color: #64748b; text-transform: uppercase;">Disk WAL Transactions</div>
+            <div style="font-size: 1.2rem; font-weight: bold; color: #7c3aed;">#{{ wal_stats.last_sequence }}</div>
+            <div style="font-size: 0.75rem; color: #64748b;">Committed ACK: #{{ wal_stats.acknowledged_sequence }} | Pending: {{ wal_stats.pending_count }}</div>
+        </div>
+        <div style="background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
+            <div style="font-size: 0.8rem; color: #64748b; text-transform: uppercase;">Merkle DAG Snapshots</div>
+            <div style="font-size: 1.2rem; font-weight: bold; color: #0369a1;">{{ dag_nodes }} nodes</div>
+            <div style="font-size: 0.75rem; color: #64748b;">Tamper-proof answer revision history on disk</div>
+        </div>
+    </div>
+
+    <!-- Live Interactive Huffman Delta Playground -->
+    <div style="margin-top: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; padding: 12px;">
+        <h4 style="margin: 0 0 6px 0; color: #166534; font-size: 0.95rem;">⚡ Interactive Huffman Delta Compression Playground</h4>
+        <p style="font-size: 0.8rem; color: #15803d; margin: 0 0 10px 0;">
+            Test how the C++ backend generates Huffman-compressed binary deltas between answer revisions:
+        </p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+                <label style="font-size: 0.8rem; font-weight: 600;">Previous Answer Draft:</label>
+                <input type="text" id="demoOldText" value="Binary search tree provides logarithmic search time." style="margin: 4px 0 8px 0;">
+            </div>
+            <div>
+                <label style="font-size: 0.8rem; font-weight: 600;">Revised Answer Text:</label>
+                <input type="text" id="demoNewText" value="Binary search tree provides logarithmic search time and requires rotations for balancing." style="margin: 4px 0 8px 0;">
+            </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+            <button type="button" class="btn btn-sm" style="background: #16a34a;" onclick="runCompressDemo()">Compress Delta via C ABI</button>
+            <div id="demoResult" style="font-size: 0.85rem; font-weight: 600; color: #14532d;">
+                Click to encode delta with Huffman coding
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function runCompressDemo() {
+    var oldT = document.getElementById("demoOldText").value;
+    var newT = document.getElementById("demoNewText").value;
+    var resDiv = document.getElementById("demoResult");
+    resDiv.textContent = "Encoding with Huffman tree in C++...";
+
+    fetch("/api/compress_demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_text: oldT, new_text: newT })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        resDiv.innerHTML = "Original: <strong>" + d.orig_size + " bytes</strong> &rarr; Huffman Delta: <strong>" + d.comp_bytes + " bytes</strong> (" + d.bit_length + " bits) | Savings: <strong>" + d.savings_pct + "%</strong>";
+    })
+    .catch(function(e) {
+        resDiv.textContent = "Compression error: " + e;
+    });
+}
+</script>
 
 <!-- Collusion & Cheating Detection Section -->
 <div class="card">

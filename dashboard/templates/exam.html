@@ -3,40 +3,74 @@
 {% block title %}EduRoute - Exam (Student #{{ student_id }}){% endblock %}
 
 {% block content %}
-<div class="card" style="background: #f8fafc; border-left: 4px solid #2563eb;">
+<!-- Live Session & Network Resilience Banner -->
+<div class="card" style="background: #f8fafc; border-left: 4px solid #2563eb; margin-bottom: 12px;">
     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div>
             <h2 style="margin: 0; border: none; padding: 0;">Student #{{ student_id }} Exam Session</h2>
-            <span style="font-size: 0.85rem; color: #64748b;">Adaptive IRT Question Selection Active</span>
+            <span style="font-size: 0.85rem; color: #64748b;">Adaptive IRT Active | Div 1 WAL & Merkle DAG Backed</span>
         </div>
-        <div>
-            {% if is_flagged %}
-                <span class="badge badge-red" title="Cheating ring detected by backend DSU">FLAGGED BY ANTICHEAT</span>
-            {% else %}
-                <span class="badge badge-green">STATUS: NORMAL</span>
-            {% endif %}
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <span id="netStatusBadge" class="badge badge-green">🟢 Online (Connected)</span>
+            <span id="diskQueueBadge" class="badge badge-yellow" style="display: none;">💾 On-Disk Queue: <strong id="diskQueueCount">0</strong></span>
+            <button type="button" id="toggleNetBtn" class="btn btn-sm" style="background: #dc2626;" onclick="toggleNetworkSimulation()">
+                🔌 Simulate Internet Disconnect
+            </button>
+            <button type="button" id="syncDiskBtn" class="btn btn-sm" style="background: #16a34a; display: none;" onclick="syncOfflineQueueFromDisk()">
+                🔄 Recover & Sync Stored Data (<span id="syncDiskCount">0</span>)
+            </button>
         </div>
     </div>
 
     <!-- Student Live Metrics Grid -->
     <div class="stats-grid" style="margin-top: 10px;">
         <div class="stat-box">
-            <div class="stat-val">{{ current_score }}</div>
+            <div class="stat-val" id="metricScore">{{ current_score }}</div>
             <div class="stat-lbl">Scaled Score (0-10000)</div>
         </div>
         <div class="stat-box">
-            <div class="stat-val">#{{ live_rank }}</div>
+            <div class="stat-val" id="metricRank">#{{ live_rank }}</div>
             <div class="stat-lbl">AVL Exact Rank</div>
         </div>
         <div class="stat-box">
-            <div class="stat-val">{{ live_percentile }}%</div>
+            <div class="stat-val" id="metricPercentile">{{ live_percentile }}%</div>
             <div class="stat-lbl">Fenwick Percentile</div>
         </div>
         <div class="stat-box">
-            <div class="stat-val">{{ updated_theta }}</div>
+            <div class="stat-val" id="metricTheta">{{ updated_theta }}</div>
             <div class="stat-lbl">IRT Ability (θ)</div>
         </div>
     </div>
+
+    <!-- Compression & WAL Telemetry Bar -->
+    <div style="margin-top: 8px; font-size: 0.8rem; color: #475569; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+        <span>
+            <strong>Huffman Delta Compression:</strong>
+            <span id="compSavings">{{ comp_stats.savings_pct }}% saved</span>
+            (<span id="compBytes">{{ comp_stats.total_comp_bytes }}</span> / <span id="origBytes">{{ comp_stats.total_orig_bytes }}</span> bytes across <span id="compDeltas">{{ comp_stats.total_deltas }}</span> deltas)
+        </span>
+        <span>
+            <strong>Disk WAL Sequence:</strong> #<span id="walSeq">{{ wal_stats.last_sequence }}</span> (Acked: #<span id="walAck">{{ wal_stats.acknowledged_sequence }}</span>)
+        </span>
+    </div>
+</div>
+
+<!-- Offline Status Alert Banner -->
+<div id="offlineNotice" class="alert alert-warning" style="display: none;">
+    <strong>⚠️ Internet Disconnected (Offline Mode Active):</strong>
+    Your answers are automatically saved to local disk storage (<tt>localStorage/IndexedDB</tt>).
+    You can continue writing and submitting answers. All offline submissions will be buffered and automatically recovered and synced with the C++ engine when internet reconnects!
+</div>
+
+<!-- Disk Restore Alert Banner -->
+<div id="draftRestoredNotice" class="alert alert-info" style="display: none;">
+    <strong>💾 Draft Recovered from Disk:</strong> Restored previously saved uncommitted answer draft from local disk cache.
+</div>
+
+<!-- Sync Success Banner -->
+<div id="syncSuccessNotice" class="alert alert-success" style="display: none;">
+    <strong>✅ Internet Reconnected & Synchronized:</strong>
+    <span id="syncSuccessMsg">Successfully recovered and synced submissions from disk into backend WAL and Merkle DAG!</span>
 </div>
 
 {% if error %}
@@ -58,25 +92,33 @@
     </h3>
 
     <form action="/exam/submit" method="POST" id="examForm">
-        <input type="hidden" name="student_id" value="{{ student_id }}">
-        <input type="hidden" name="question_id" value="{{ question.id }}">
-        <input type="hidden" name="question_type" value="{{ question.type }}">
+        <input type="hidden" name="student_id" id="formStudentId" value="{{ student_id }}">
+        <input type="hidden" name="question_id" id="formQuestionId" value="{{ question.id }}">
+        <input type="hidden" name="question_type" id="formQuestionType" value="{{ question.type }}">
         <input type="hidden" id="monotonic_dt_ms" name="monotonic_dt_ms" value="5000">
 
         {% if question.type == "mcq" %}
-            <p style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">Select the best option:</p>
+            <p style="font-size: 0.85rem; color: #475569; margin-bottom: 8px;">Select the best option (auto-saved to disk):</p>
             {% for opt in question.options %}
             <label class="radio-opt">
-                <input type="radio" name="mcq_option" value="{{ loop.index0 }}" required>
+                <input type="radio" name="mcq_option" value="{{ loop.index0 }}" onchange="saveDraftToDisk()" required>
                 <strong>{{ ['A', 'B', 'C', 'D'][loop.index0] }}.</strong> {{ opt }}
             </label>
             {% endfor %}
         {% else %}
-            <label for="full_text" style="font-weight: 600; font-size: 0.9rem;">Your Detailed Answer (Text):</label>
-            <textarea id="full_text" name="full_text" rows="6" placeholder="Type your answer here. Submissions are checked for k-mer similarity and plagiarism..." required></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label for="full_text" style="font-weight: 600; font-size: 0.9rem;">Your Detailed Answer (Text):</label>
+                <span id="liveCharCount" style="font-size: 0.75rem; color: #64748b;">0 bytes uncompressed</span>
+            </div>
+            <textarea id="full_text" name="full_text" rows="6"
+                      placeholder="Type your answer here. Keystrokes are continuously persisted to disk and compressed with Huffman delta encoding upon ingest..."
+                      oninput="onAnswerInput()" required></textarea>
+            <div style="font-size: 0.75rem; color: #0284c7; margin-top: -6px; margin-bottom: 8px;">
+                ⚡ Continuous Disk Auto-Save: Active | Huffman Delta Compresser: Ready
+            </div>
         {% endif %}
 
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; flex-wrap: wrap; gap: 8px;">
             <span style="font-size: 0.8rem; color: #64748b;">
                 Time on question: <span id="timerDisplay">0s</span>
             </span>
@@ -86,30 +128,271 @@
 </div>
 
 <script>
-    // Lightweight monotonic stopwatch for low-end browsers
-    (function() {
-        var startTime = Date.now();
-        var timerDisplay = document.getElementById("timerDisplay");
-        var dtInput = document.getElementById("monotonic_dt_ms");
-        
-        var interval = setInterval(function() {
-            var elapsed = Date.now() - startTime;
-            dtInput.value = elapsed;
-            if (timerDisplay) {
-                timerDisplay.textContent = Math.floor(elapsed / 1000) + "s";
-            }
-        }, 1000);
+    var studentId = {{ student_id }};
+    var questionId = {{ question.id }};
+    var questionType = "{{ question.type }}";
+    var isSimulatedOffline = false;
+    var startTime = Date.now();
+    var timerDisplay = document.getElementById("timerDisplay");
+    var dtInput = document.getElementById("monotonic_dt_ms");
 
-        var form = document.getElementById("examForm");
-        if (form) {
-            form.addEventListener("submit", function() {
-                clearInterval(interval);
-                var totalElapsed = Date.now() - startTime;
-                dtInput.value = totalElapsed;
-                document.getElementById("submitBtn").disabled = true;
-                document.getElementById("submitBtn").textContent = "Submitting to C++ Engine...";
-            });
+    // Local disk storage keys
+    var DRAFT_KEY = "eduroute_draft_" + studentId + "_" + questionId;
+    var QUEUE_KEY = "eduroute_offline_queue_" + studentId;
+
+    // 1. Monotonic Timer
+    var timerInterval = setInterval(function() {
+        var elapsed = Date.now() - startTime;
+        if (dtInput) dtInput.value = elapsed;
+        if (timerDisplay) timerDisplay.textContent = Math.floor(elapsed / 1000) + "s";
+    }, 1000);
+
+    // 2. Continuous Local Disk Storage Draft Auto-Save
+    function saveDraftToDisk() {
+        var draft = {};
+        if (questionType === "mcq") {
+            var selected = document.querySelector('input[name="mcq_option"]:checked');
+            if (selected) draft.mcq_option = selected.value;
+        } else {
+            var txt = document.getElementById("full_text");
+            if (txt) draft.full_text = txt.value;
         }
-    })();
+        draft.elapsed_ms = Date.now() - startTime;
+        draft.saved_at = Date.now();
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    }
+
+    function restoreDraftFromDisk() {
+        var raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        try {
+            var draft = JSON.parse(raw);
+            if (questionType === "mcq" && draft.mcq_option !== undefined) {
+                var radio = document.querySelector('input[name="mcq_option"][value="' + draft.mcq_option + '"]');
+                if (radio) {
+                    radio.checked = true;
+                    document.getElementById("draftRestoredNotice").style.display = "block";
+                }
+            } else if (questionType !== "mcq" && draft.full_text) {
+                var txt = document.getElementById("full_text");
+                if (txt && !txt.value) {
+                    txt.value = draft.full_text;
+                    document.getElementById("draftRestoredNotice").style.display = "block";
+                    onAnswerInput();
+                }
+            }
+        } catch (e) {
+            console.error("Draft parsing error", e);
+        }
+    }
+
+    function onAnswerInput() {
+        saveDraftToDisk();
+        var txt = document.getElementById("full_text");
+        var countSpan = document.getElementById("liveCharCount");
+        if (txt && countSpan) {
+            var bytes = new Blob([txt.value]).size;
+            var estComp = Math.max(2, Math.floor(bytes * 0.45));
+            countSpan.innerHTML = bytes + " bytes uncompressed &rarr; ~" + estComp + " bytes (est. Huffman delta)";
+        }
+    }
+
+    // 3. Offline Submissions Queue Management on Disk
+    function getOfflineQueue() {
+        var raw = localStorage.getItem(QUEUE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    }
+
+    function setOfflineQueue(queue) {
+        localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+        updateDiskQueueUI();
+    }
+
+    function updateDiskQueueUI() {
+        var q = getOfflineQueue();
+        var badge = document.getElementById("diskQueueBadge");
+        var count = document.getElementById("diskQueueCount");
+        var syncBtn = document.getElementById("syncDiskBtn");
+        var syncCount = document.getElementById("syncDiskCount");
+
+        if (q.length > 0) {
+            if (badge) badge.style.display = "inline-block";
+            if (count) count.textContent = q.length;
+            if (syncBtn) syncBtn.style.display = "inline-block";
+            if (syncCount) syncCount.textContent = q.length;
+        } else {
+            if (badge) badge.style.display = "none";
+            if (syncBtn) syncBtn.style.display = "none";
+        }
+    }
+
+    function isEffectivelyOffline() {
+        return isSimulatedOffline || !navigator.onLine;
+    }
+
+    // 4. Toggle Simulated Disconnect
+    function toggleNetworkSimulation() {
+        isSimulatedOffline = !isSimulatedOffline;
+        applyNetworkState();
+    }
+
+    function applyNetworkState() {
+        var statusBadge = document.getElementById("netStatusBadge");
+        var toggleBtn = document.getElementById("toggleNetBtn");
+        var notice = document.getElementById("offlineNotice");
+
+        if (isEffectivelyOffline()) {
+            statusBadge.className = "badge badge-red";
+            statusBadge.textContent = "🔴 Offline (Disconnected)";
+            toggleBtn.textContent = "🔌 Restore Internet Connection";
+            toggleBtn.style.background = "#0f766e";
+            notice.style.display = "block";
+        } else {
+            statusBadge.className = "badge badge-green";
+            statusBadge.textContent = "🟢 Online (Connected)";
+            toggleBtn.textContent = "🔌 Simulate Internet Disconnect";
+            toggleBtn.style.background = "#dc2626";
+            notice.style.display = "none";
+
+            // If we have pending offline submissions on disk, auto-sync them!
+            var q = getOfflineQueue();
+            if (q.length > 0) {
+                syncOfflineQueueFromDisk();
+            }
+        }
+    }
+
+    window.addEventListener("online", function() {
+        applyNetworkState();
+    });
+    window.addEventListener("offline", function() {
+        applyNetworkState();
+    });
+
+    // 5. Recover & Sync Stored Offline Queue from Disk to Server
+    function syncOfflineQueueFromDisk() {
+        var q = getOfflineQueue();
+        if (q.length === 0) return;
+
+        var syncBtn = document.getElementById("syncDiskBtn");
+        if (syncBtn) {
+            syncBtn.disabled = true;
+            syncBtn.textContent = "Syncing from disk...";
+        }
+
+        fetch("/api/sync_offline", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                student_id: studentId,
+                submissions: q
+            })
+        })
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            if (data.success) {
+                // Clear synchronized items from local disk
+                localStorage.removeItem(QUEUE_KEY);
+                updateDiskQueueUI();
+
+                // Update metrics live
+                if (data.session) {
+                    document.getElementById("metricScore").textContent = data.session.current_score;
+                    document.getElementById("metricRank").textContent = "#" + data.session.live_rank;
+                    document.getElementById("metricPercentile").textContent = data.session.live_percentile + "%";
+                    document.getElementById("metricTheta").textContent = data.session.updated_theta;
+                }
+                if (data.compression_stats) {
+                    document.getElementById("compSavings").textContent = data.compression_stats.savings_pct + "% saved";
+                    document.getElementById("compBytes").textContent = data.compression_stats.total_comp_bytes;
+                    document.getElementById("origBytes").textContent = data.compression_stats.total_orig_bytes;
+                    document.getElementById("compDeltas").textContent = data.compression_stats.total_deltas;
+                }
+                if (data.wal_stats) {
+                    document.getElementById("walSeq").textContent = data.wal_stats.last_sequence;
+                    document.getElementById("walAck").textContent = data.wal_stats.acknowledged_sequence;
+                }
+
+                var successDiv = document.getElementById("syncSuccessNotice");
+                var successMsg = document.getElementById("syncSuccessMsg");
+                if (successDiv && successMsg) {
+                    successMsg.textContent = "Successfully recovered and synced " + data.synced_count + " answer(s) from local disk storage into the C++ WAL & Merkle DAG!";
+                    successDiv.style.display = "block";
+                }
+
+                if (syncBtn) {
+                    syncBtn.disabled = false;
+                    syncBtn.style.display = "none";
+                }
+            }
+        })
+        .catch(function(err) {
+            console.error("Sync error:", err);
+            if (syncBtn) {
+                syncBtn.disabled = false;
+                syncBtn.textContent = "Sync Failed (Retry)";
+            }
+        });
+    }
+
+    // 6. Form Submission Interceptor: Routes to Disk Queue if Offline
+    var form = document.getElementById("examForm");
+    if (form) {
+        form.addEventListener("submit", function(e) {
+            if (isEffectivelyOffline()) {
+                e.preventDefault(); // Do not trigger browser navigation failure
+
+                var elapsed = Date.now() - startTime;
+                var submission = {
+                    student_id: studentId,
+                    question_id: questionId,
+                    question_type: questionType,
+                    monotonic_dt_ms: elapsed,
+                    timestamp: Date.now()
+                };
+
+                if (questionType === "mcq") {
+                    var sel = document.querySelector('input[name="mcq_option"]:checked');
+                    submission.mcq_option = sel ? parseInt(sel.value, 10) : 0;
+                } else {
+                    var txt = document.getElementById("full_text");
+                    submission.full_text = txt ? txt.value : "";
+                }
+
+                // Append to local disk queue
+                var q = getOfflineQueue();
+                q.push(submission);
+                setOfflineQueue(q);
+
+                // Remove draft since it is safely queued
+                localStorage.removeItem(DRAFT_KEY);
+
+                var notice = document.getElementById("offlineNotice");
+                notice.innerHTML = "<strong>💾 Answer Saved to Local Disk Queue!</strong> (" + q.length + " pending submission). When internet connection is restored, click <em>Recover & Sync Stored Data</em> or let auto-reconnect synchronize your answers to the C++ engine!";
+                notice.style.display = "block";
+
+                var submitBtn = document.getElementById("submitBtn");
+                submitBtn.disabled = true;
+                submitBtn.textContent = "Saved to Disk (Offline)";
+
+                setTimeout(function() {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = "Submit Revised Answer &rarr;";
+                }, 1500);
+
+                return false;
+            }
+
+            // If online, normal submit: remove local draft
+            localStorage.removeItem(DRAFT_KEY);
+            var submitBtn = document.getElementById("submitBtn");
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Submitting to C++ Engine (WAL & DAG)...";
+        });
+    }
+
+    // Restore any existing uncommitted draft and update disk queue UI
+    restoreDraftFromDisk();
+    updateDiskQueueUI();
 </script>
 {% endblock %}

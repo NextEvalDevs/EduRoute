@@ -61,12 +61,18 @@ def index():
     mem = engine.get_memory_used()
     leaderboard = engine.get_top_k(50)
     edges = engine.get_collusion_edges(50)
+    comp_stats = engine.get_compression_stats()
+    wal_stats = engine.get_wal_stats()
+    dag_nodes = engine.get_dag_node_count()
     return render_template(
         "index.html",
         bank_size=len(QUESTION_BANK),
         top_students=leaderboard,
         confirmed_edges=edges,
-        mem=mem
+        mem=mem,
+        comp_stats=comp_stats,
+        wal_stats=wal_stats,
+        dag_nodes=dag_nodes
     )
 
 @app.route("/exam", methods=["GET"])
@@ -90,17 +96,23 @@ def exam():
         session_data["current_question_id"] = q_data["id"]
 
     topic_name = TOPICS.get(q_data["topic_id"], "General")
+    comp_stats = engine.get_compression_stats()
+    wal_stats = engine.get_wal_stats()
 
     return render_template(
         "exam.html",
         student_id=student_id,
         question=q_data,
+        questions_bank=QUESTION_BANK,
+        topics_dict=TOPICS,
         topic_name=topic_name,
         current_score=session_data["current_score"],
         live_rank=session_data["live_rank"],
         live_percentile=session_data["live_percentile"],
         updated_theta=session_data["updated_theta"],
         is_flagged=session_data["is_flagged"],
+        comp_stats=comp_stats,
+        wal_stats=wal_stats,
         error=request.args.get("error")
     )
 
@@ -170,7 +182,10 @@ def exam_completed():
         live_percentile=session_data["live_percentile"],
         updated_theta=session_data["updated_theta"],
         is_flagged=session_data["is_flagged"],
-        cluster_root_id=session_data["cluster_root_id"]
+        cluster_root_id=session_data["cluster_root_id"],
+        comp_stats=engine.get_compression_stats(),
+        wal_stats=engine.get_wal_stats(),
+        dag_nodes=engine.get_dag_node_count()
     )
 
 @app.route("/dashboard")
@@ -179,13 +194,20 @@ def dashboard():
     leaderboard = engine.get_top_k(50)
     edges = engine.get_collusion_edges(50)
     mem = engine.get_memory_used()
+    comp_stats = engine.get_compression_stats()
+    wal_stats = engine.get_wal_stats()
+    dag_nodes = engine.get_dag_node_count()
     return render_template(
         "dashboard.html",
         auto_refresh=auto,
         leaderboard=leaderboard,
         edges=edges,
         mem=mem,
-        bank_size=len(QUESTION_BANK)
+        comp_stats=comp_stats,
+        wal_stats=wal_stats,
+        dag_nodes=dag_nodes,
+        bank_size=len(QUESTION_BANK),
+        notice=request.args.get("notice")
     )
 
 @app.route("/questions")
@@ -271,6 +293,154 @@ def api_collusion():
 @app.route("/api/telemetry", methods=["GET"])
 def api_telemetry():
     return jsonify(engine.get_memory_used())
+
+@app.route("/api/compression_stats", methods=["GET"])
+def api_compression_stats():
+    return jsonify(engine.get_compression_stats())
+
+@app.route("/api/wal_stats", methods=["GET"])
+def api_wal_stats():
+    return jsonify(engine.get_wal_stats())
+
+@app.route("/api/compress_demo", methods=["POST"])
+def api_compress_demo():
+    data = request.get_json(silent=True) or request.form
+    old_text = data.get("old_text", "")
+    new_text = data.get("new_text", "")
+    stats = engine.compress_delta(1, old_text, new_text)
+    return jsonify(stats)
+
+@app.route("/api/sync_offline", methods=["POST"])
+def api_sync_offline():
+    """
+    Receives an array of offline queued submissions stored in browser disk (localStorage).
+    Ingests each into the C++ engine (WAL + Huffman + Merkle DAG + AntiCheat + IRT)
+    and returns updated score, live rank, and sync confirmation.
+    """
+    data = request.get_json(silent=True)
+    if not data or "submissions" not in data:
+        return jsonify({"success": False, "error": "No submissions array provided"}), 400
+
+    student_id = int(data.get("student_id", 1))
+    session_data = get_or_create_student_session(student_id)
+    submissions = data.get("submissions", [])
+
+    results = []
+    t_now = int(time.time() * 1000)
+
+    for item in submissions:
+        qid = int(item.get("question_id", 1))
+        q_type = item.get("question_type", "mcq")
+        dt = int(item.get("monotonic_dt_ms", 5000))
+
+        if q_type == "mcq":
+            mcq_opt = int(item.get("mcq_option", 0))
+            full_txt = None
+            act = EduRouteBridge.ACTION_MCQ
+        else:
+            mcq_opt = 0xFF
+            full_txt = item.get("full_text", "")
+            act = EduRouteBridge.ACTION_TEXT_DELTA
+
+        res = engine.submit_answer(
+            student_id=student_id,
+            question_id=qid,
+            action_type=act,
+            mcq_option=mcq_opt,
+            monotonic_dt_ms=dt,
+            full_text=full_txt,
+            server_recv_ms=t_now
+        )
+
+        session_data["current_score"] = res["current_score"]
+        session_data["live_rank"] = res["live_rank"]
+        session_data["live_percentile"] = res["live_percentile"]
+        session_data["updated_theta"] = res["updated_theta"]
+        session_data["is_flagged"] = res["is_flagged_ring"]
+        session_data["cluster_root_id"] = res["cluster_root_id"]
+        session_data["answered_count"] += 1
+        if res["next_question_id"] is not None:
+            session_data["current_question_id"] = res["next_question_id"]
+
+        results.append(res)
+
+    return jsonify({
+        "success": True,
+        "synced_count": len(submissions),
+        "student_id": student_id,
+        "session": session_data,
+        "compression_stats": engine.get_compression_stats(),
+        "wal_stats": engine.get_wal_stats(),
+        "dag_nodes": engine.get_dag_node_count()
+    })
+
+@app.route("/api/simulate_offline_sync", methods=["POST"])
+def simulate_offline_sync():
+    """
+    Demonstrates offline resilience: Student #99 was disconnected from internet,
+    buffered 3 answers to local disk storage, and now reconnects and syncs!
+    """
+    sid = 99
+    session = get_or_create_student_session(sid)
+    t_now = int(time.time() * 1000)
+
+    # Question 1: MCQ Answer (stored offline on disk)
+    engine.submit_answer(
+        student_id=sid, question_id=1,
+        action_type=EduRouteBridge.ACTION_MCQ,
+        mcq_option=2, monotonic_dt_ms=4500,
+        server_recv_ms=t_now
+    )
+
+    # Question 2: Descriptive text Draft 1 (stored offline on disk)
+    txt1 = "Adjacency list uses dyn_array of vertices to minimize memory."
+    engine.submit_answer(
+        student_id=sid, question_id=16,
+        action_type=EduRouteBridge.ACTION_TEXT_DELTA,
+        mcq_option=0xFF, monotonic_dt_ms=8000,
+        full_text=txt1, server_recv_ms=t_now + 100
+    )
+
+    # Question 2: Descriptive text Revision 2 (stored offline on disk, Huffman compressed delta)
+    txt2 = "Adjacency list uses dyn_array of vertices to minimize memory and enables O(V+E) graph traversal."
+    res = engine.submit_answer(
+        student_id=sid, question_id=16,
+        action_type=EduRouteBridge.ACTION_TEXT_DELTA,
+        mcq_option=0xFF, monotonic_dt_ms=13000,
+        full_text=txt2, server_recv_ms=t_now + 200
+    )
+
+    session["current_score"] = res["current_score"]
+    session["live_rank"] = res["live_rank"]
+    session["live_percentile"] = res["live_percentile"]
+    session["updated_theta"] = res["updated_theta"]
+    session["is_flagged"] = res["is_flagged_ring"]
+
+    notice = f"Successfully recovered and synced 3 offline disk answers for Student #{sid} into WAL and Merkle DAG!"
+    return redirect(url_for("dashboard", notice=notice))
+
+@app.route("/api/simulate_wal_restart", methods=["POST"])
+def simulate_wal_restart():
+    """
+    Demonstrates backend WAL crash recovery from disk:
+    1. Appends unacknowledged WAL record representing an interrupted connection
+    2. Simulates server crash & reboot
+    3. Replays WAL from disk, decompresses Huffman delta, and commits ACK.
+    """
+    sid = 88
+    t_now = int(time.time() * 1000)
+    unacked_seq = engine.wal_append_unacked(
+        student_id=sid, question_id=18, timestamp_ms=t_now,
+        old_text="Initial draft before disconnect",
+        new_text="Final revision preserved on disk during sudden disconnect"
+    )
+
+    # Decompress and recover the pending record from disk WAL
+    rec = engine.wal_recover_and_apply_next()
+    recovered_text = rec["text"] if rec else "None"
+
+    notice = f"WAL Disk Recovery Check: Found unacked sequence #{unacked_seq} on disk, decompressed Huffman delta: '{recovered_text}'"
+    return redirect(url_for("dashboard", notice=notice))
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

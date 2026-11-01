@@ -140,6 +140,44 @@ int eduroute_get_dag_latest (const EduRouteEngine *engine, uint32_t student_id, 
 
 size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, uint32_t student_id, uint16_t question_id);
 
+// -----------------------------------------------------------------------------
+// Sync Engine, WAL & Huffman Compression API (Division 1)
+// -----------------------------------------------------------------------------
+
+// WAL status and disk persistence
+size_t eduroute_wal_pending_count (const EduRouteEngine *engine);
+uint64_t eduroute_wal_last_sequence (const EduRouteEngine *engine);
+uint64_t eduroute_wal_acknowledged_sequence (const EduRouteEngine *engine);
+int eduroute_wal_acknowledge (EduRouteEngine *engine, uint64_t sequence);
+
+// Peek oldest pending unacknowledged WAL record recovered from disk
+int eduroute_wal_peek_next (const EduRouteEngine *engine, uint64_t *out_sequence, uint32_t *out_student_id,
+                            uint64_t *out_timestamp_ms, size_t *out_original_size, size_t *out_compressed_bytes,
+                            size_t *out_delta_count);
+
+// Explicitly append an unacknowledged WAL record (used for offline test & simulation)
+int eduroute_wal_append_unacked (EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+                                 uint64_t timestamp_ms, const char *old_text, const char *new_text,
+                                 uint64_t *out_sequence);
+
+// Decompress oldest pending WAL record recovered from disk, copy answer text, and acknowledge
+int eduroute_wal_recover_and_apply_next (EduRouteEngine *engine, uint64_t *out_sequence, uint32_t *out_student_id,
+                                         char *out_text_buf, size_t buf_cap, size_t *out_text_len);
+
+// Compress delta between two text states using Huffman encoding, returning compressed byte length
+size_t eduroute_compress_delta (EduRouteEngine *engine, uint32_t answer_id, const char *old_text, const char *new_text,
+                                size_t *out_original_size, size_t *out_bit_length);
+
+// Cumulative compression telemetry (bytes before vs after Huffman compression)
+void eduroute_get_compression_stats (const EduRouteEngine *engine, size_t *out_total_orig_bytes,
+                                     size_t *out_total_comp_bytes, size_t *out_total_deltas,
+                                     float *out_avg_savings_pct);
+
+// Ingest an offline-recovered answer directly with delta compression and WAL persistence
+EduIngestResult eduroute_ingest_recovered_answer (EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+                                                  uint8_t action_type, uint8_t mcq_option, uint32_t monotonic_dt_ms,
+                                                  const char *full_text, size_t text_len, uint64_t server_recv_ms);
+
 #ifdef __cplusplus
 }
 #endif

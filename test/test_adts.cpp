@@ -32,7 +32,7 @@
 #include "eduroute_c_api.h"
 
 // -----------------------------------------------------------------------------
-// Minimalist Test Harness (No STL)
+// Minimalist Test Harness
 // -----------------------------------------------------------------------------
 static int g_total_assertions  = 0;
 static int g_failed_assertions = 0;
@@ -1007,11 +1007,137 @@ static void test_c_api_merkle_dag () {
 }
 
 // -----------------------------------------------------------------------------
+// Suite 9: C ABI Huffman Compression & Offline Disk Recovery Pipeline
+// -----------------------------------------------------------------------------
+static void test_c_api_offline_recovery_compression () {
+    TEST_SUITE_START ("C ABI Huffman Compression & Offline Disk Recovery");
+
+    const char *wal_path      = "/tmp/test_eduroute_offline_sync.bin";
+    const char *dag_path      = "/tmp/test_eduroute_offline_sync.bin.dag";
+    const char *ring_wal_path = "/tmp/test_eduroute_offline_sync.bin.wal";
+    std::remove (wal_path);
+    std::remove (dag_path);
+    std::remove (ring_wal_path);
+
+    // 1. Create engine with backing files
+    EduRouteEngine *engine = eduroute_create (50, 10, wal_path);
+    TEST_ASSERT (engine != nullptr, "Engine created with WAL/DAG backing");
+    TEST_ASSERT (eduroute_wal_pending_count (engine) == 0, "Initial WAL pending count is 0");
+    TEST_ASSERT (eduroute_wal_last_sequence (engine) == 0, "Initial WAL last sequence is 0");
+
+    // Register test questions
+    eduroute_register_question (engine, 1, 0, 1000.0f, 15000, 2); // Q1 MCQ
+    eduroute_register_question (engine, 2, 0, 1200.0f, 20000, 0); // Q2 Descriptive
+
+    // 2. Direct Huffman Delta Compression Verification
+    const char *text_draft1 = "Hash tables use open addressing with quadratic probing";
+    const char *text_draft2 = "Hash tables use open addressing with quadratic probing to resolve collisions";
+
+    size_t orig_sz = 0, bit_len = 0;
+    size_t comp_bytes = eduroute_compress_delta (engine, 2, text_draft1, text_draft2, &orig_sz, &bit_len);
+    TEST_ASSERT (orig_sz > 0, "Original delta size is greater than 0");
+    TEST_ASSERT (bit_len > 0, "Huffman bit length is greater than 0");
+    TEST_ASSERT (comp_bytes > 0 && comp_bytes <= orig_sz + 10, "Compressed delta bytes produced");
+
+    // Compressing identical text yields 0 delta bytes
+    size_t no_delta_orig = 0, no_delta_bits = 0;
+    size_t no_delta_bytes =
+            eduroute_compress_delta (engine, 2, text_draft1, text_draft1, &no_delta_orig, &no_delta_bits);
+    TEST_ASSERT (no_delta_bytes == 0, "Compressing identical text yields 0 deltas");
+
+    // 3. Online Connected Ingestion: Student #12 answers Question #1
+    EduIngestResult res1 =
+            eduroute_ingest_recovered_answer (engine, 12, 1, 0 /* MCQ */, 2 /* option C */, 2000, nullptr, 0, 1000);
+    TEST_ASSERT (res1.status_code == 0, "Student 12 MCQ submission ingested");
+    TEST_ASSERT (eduroute_wal_last_sequence (engine) == 1, "WAL sequence 1 recorded");
+    TEST_ASSERT (eduroute_wal_acknowledged_sequence (engine) == 1, "WAL sequence 1 acknowledged on completion");
+    TEST_ASSERT (eduroute_wal_pending_count (engine) == 0, "0 pending WAL records in connected state");
+    TEST_ASSERT (eduroute_get_dag_node_count (engine) == 1, "DAG node count is 1");
+
+    // Check cumulative compression telemetry
+    size_t tot_orig = 0, tot_comp = 0, tot_deltas = 0;
+    float savings_pct = 0.0f;
+    eduroute_get_compression_stats (engine, &tot_orig, &tot_comp, &tot_deltas, &savings_pct);
+    TEST_ASSERT (tot_deltas >= 1, "At least 1 delta recorded in telemetry");
+
+    // 4. Simulate Internet Disconnection: Student #12 continues answering while OFFLINE
+    // Draft 1 buffered to disk
+    uint64_t seq2  = 0;
+    int append_ok2 = eduroute_wal_append_unacked (engine, 12, 2, 2500, "", text_draft1, &seq2);
+    TEST_ASSERT (append_ok2 == 1, "Offline unacked draft 1 appended to disk WAL");
+    TEST_ASSERT (seq2 == 2, "Sequence 2 assigned to offline draft 1");
+
+    // Revision 2 buffered to disk
+    uint64_t seq3  = 0;
+    int append_ok3 = eduroute_wal_append_unacked (engine, 12, 2, 4500, text_draft1, text_draft2, &seq3);
+    TEST_ASSERT (append_ok3 == 1, "Offline unacked revision 2 appended to disk WAL");
+    TEST_ASSERT (seq3 == 3, "Sequence 3 assigned to offline revision 2");
+
+    // Verify uncommitted state pending on disk
+    TEST_ASSERT (eduroute_wal_pending_count (engine) == 2, "WAL pending count is 2 unacknowledged records");
+    TEST_ASSERT (eduroute_wal_last_sequence (engine) == 3, "WAL last sequence is 3");
+    TEST_ASSERT (eduroute_wal_acknowledged_sequence (engine) == 1, "WAL acknowledged sequence remains 1");
+
+    // 5. Simulate System Crash / Power Loss while Disconnected
+    eduroute_destroy (engine); // Memory wiped completely!
+
+    // 6. System Reboots & Reconnects: Recover Data from Disk
+    EduRouteEngine *recovered_eng = eduroute_create (50, 10, wal_path);
+    TEST_ASSERT (recovered_eng != nullptr, "Reopened EduRouteEngine from disk files");
+    TEST_ASSERT (eduroute_wal_pending_count (recovered_eng) == 2,
+                 "Engine recovered 2 unacknowledged records from disk WAL");
+    TEST_ASSERT (eduroute_wal_last_sequence (recovered_eng) == 3, "Recovered last sequence is 3");
+    TEST_ASSERT (eduroute_wal_acknowledged_sequence (recovered_eng) == 1, "Recovered acknowledged sequence is 1");
+
+    // Peek oldest unacknowledged record from disk
+    uint64_t rec_seq = 0, rec_ts = 0;
+    uint32_t rec_sid = 0;
+    size_t rec_orig = 0, rec_comp_b = 0, rec_deltas = 0;
+    int peek_ok =
+            eduroute_wal_peek_next (recovered_eng, &rec_seq, &rec_sid, &rec_ts, &rec_orig, &rec_comp_b, &rec_deltas);
+    TEST_ASSERT (peek_ok == 1, "Peek next unacknowledged record succeeded");
+    TEST_ASSERT (rec_seq == 2, "Oldest unacknowledged record is sequence 2");
+    TEST_ASSERT (rec_sid == 12, "Unacknowledged record belongs to student 12");
+    TEST_ASSERT (rec_deltas == 1, "Unacknowledged record contains 1 compressed delta");
+
+    // Recover and decompress sequence 2 from disk
+    char rec_buf[512]{};
+    size_t rec_len  = 0;
+    int recover_ok1 = eduroute_wal_recover_and_apply_next (recovered_eng, &rec_seq, &rec_sid, rec_buf, sizeof (rec_buf),
+                                                           &rec_len);
+    TEST_ASSERT (recover_ok1 == 1, "Recovered sequence 2 from disk");
+    TEST_ASSERT (rec_seq == 2, "Recovered record sequence is 2");
+    TEST_ASSERT (rec_sid == 12, "Recovered record student ID is 12");
+    TEST_ASSERT (rec_len == std::strlen (text_draft1), "Decompressed text length matches draft 1");
+    TEST_ASSERT (std::memcmp (rec_buf, text_draft1, rec_len) == 0, "Decompressed text matches draft 1 exactly");
+    TEST_ASSERT (eduroute_wal_pending_count (recovered_eng) == 1, "Pending count decreased to 1");
+    TEST_ASSERT (eduroute_wal_acknowledged_sequence (recovered_eng) == 2, "Acknowledged sequence advanced to 2");
+
+    // Recover and decompress sequence 3 (revision 2) from disk
+    int recover_ok2 = eduroute_wal_recover_and_apply_next (recovered_eng, &rec_seq, &rec_sid, rec_buf, sizeof (rec_buf),
+                                                           &rec_len);
+    TEST_ASSERT (recover_ok2 == 1, "Recovered sequence 3 from disk");
+    TEST_ASSERT (rec_seq == 3, "Recovered record sequence is 3");
+    TEST_ASSERT (rec_sid == 12, "Recovered record student ID is 12");
+    TEST_ASSERT (rec_len == std::strlen (text_draft2), "Decompressed text length matches revision 2");
+    TEST_ASSERT (std::memcmp (rec_buf, text_draft2, rec_len) == 0, "Decompressed text matches revision 2 exactly");
+    TEST_ASSERT (eduroute_wal_pending_count (recovered_eng) == 0,
+                 "Pending count decreased to 0 (all disk records synced)");
+    TEST_ASSERT (eduroute_wal_acknowledged_sequence (recovered_eng) == 3, "Acknowledged sequence advanced to 3");
+
+    eduroute_destroy (recovered_eng);
+
+    std::remove (wal_path);
+    std::remove (dag_path);
+    std::remove (ring_wal_path);
+}
+
+// -----------------------------------------------------------------------------
 // Main Test Runner
 // -----------------------------------------------------------------------------
 int main () {
     std::printf ("===============================================================\n");
-    std::printf ("       EduRoute Engine Extensive Unit Test Suite (No STL)     \n");
+    std::printf ("       EduRoute Engine Extensive Unit Test Suite    \n");
     std::printf ("===============================================================\n\n");
 
     // Suite 1: Core Primitives
@@ -1040,6 +1166,7 @@ int main () {
     // Suite 5: C ABI & Pipeline Integration
     test_c_api_integration ();
     test_c_api_merkle_dag ();
+    test_c_api_offline_recovery_compression ();
 
     std::printf ("\n===============================================================\n");
     std::printf (" Test Results: %d/%d assertions PASSED (%d failed) across %d suites\n",

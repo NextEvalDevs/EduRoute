@@ -46,6 +46,12 @@ struct EduRouteEngine {
 
         // --- Div 1: Sync Engine ---------------------------------------------------
         sync_engine::MerkleDAG merkle_dag;
+        sync_engine::WriteAheadLog wal;
+
+        // --- Compression Telemetry ------------------------------------------------
+        core::usize total_original_bytes;
+        core::usize total_compressed_bytes;
+        core::usize total_deltas_compressed;
 
         // --- Div 3: Adaptive Ranking ----------------------------------------------
         adaptive_rank::QuestionBank question_bank;
@@ -68,14 +74,18 @@ struct EduRouteEngine {
         // Constructor: forward to the two arenas
         EduRouteEngine (core::usize pers_bytes, core::usize scratch_bytes, core::u32 max_s, core::u32 max_q,
                         const char *wal_path) :
-            pers_arena (pers_bytes), scratch_arena (scratch_bytes), merkle_dag (pers_arena), kmer (pers_arena, 32768u),
-            max_students (max_s), max_questions (max_q), wal_fp (nullptr) {
+            pers_arena (pers_bytes), scratch_arena (scratch_bytes), merkle_dag (pers_arena), wal (pers_arena),
+            total_original_bytes (0), total_compressed_bytes (0), total_deltas_compressed (0),
+            kmer (pers_arena, 32768u), max_students (max_s), max_questions (max_q), wal_fp (nullptr) {
             students = nullptr;
             if (wal_path && wal_path[0] != '\0') {
                 wal_fp = std::fopen (wal_path, "ab");
                 char dag_path[512];
                 std::snprintf (dag_path, sizeof (dag_path), "%s.dag", wal_path);
                 merkle_dag.open (dag_path);
+                char wal_ring_path[512];
+                std::snprintf (wal_ring_path, sizeof (wal_ring_path), "%s.wal", wal_path);
+                wal.open (wal_ring_path);
             }
         }
 
@@ -84,6 +94,7 @@ struct EduRouteEngine {
                 std::fclose (wal_fp);
                 wal_fp = nullptr;
             }
+            wal.close ();
             merkle_dag.close ();
         }
 };
@@ -332,7 +343,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
 
     const auto action = static_cast<core::ActionType> (hdr.action_type);
 
-    // ---- 3b. Merkle DAG append ----------------------------------------------
+    // ---- 3b. Merkle DAG & Huffman Delta WAL Ring append --------------------
     {
         core::StringView dag_answer;
         char mcq_str[2] = {0, 0};
@@ -345,6 +356,32 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
             dag_answer =
                     core::StringView (reinterpret_cast<const char *> (payload), static_cast<core::usize> (payload_len));
         }
+
+        // Huffman delta compression: compare previous answer against current answer
+        if (engine->wal.is_open ()) {
+            sync_engine::MerkleNode prev_node{};
+            core::StringView prev_ans{};
+            if (engine->merkle_dag.latest (sid, qid, prev_node)) { prev_ans = prev_node.answer; }
+
+            sync_engine::TextDeltaArray deltas (engine->scratch_arena);
+            sync_engine::generate_text_delta (qid, prev_ans, dag_answer, deltas);
+
+            if (deltas.size () > 0) {
+                sync_engine::CompressedTextDelta comp =
+                        sync_engine::compress_text_delta (engine->scratch_arena, deltas);
+                if (comp.valid) {
+                    core::u64 seq              = 0;
+                    const core::TimestampMs ts = server_recv_ms ? server_recv_ms : hdr.monotonic_dt_ms;
+                    if (engine->wal.append (sid, ts, comp, &seq)) {
+                        engine->total_original_bytes += comp.original_size;
+                        engine->total_compressed_bytes += comp.bytes.size ();
+                        engine->total_deltas_compressed += 1;
+                        engine->wal.acknowledge (seq);
+                    }
+                }
+            }
+        }
+
         engine->merkle_dag.append (sid, qid, hdr.monotonic_dt_ms, dag_answer, nullptr);
     }
 
@@ -588,4 +625,160 @@ extern "C" size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, u
     if (!engine) return 0u;
     return engine->merkle_dag.history_size (static_cast<core::StudentId> (student_id),
                                             static_cast<core::QuestionId> (question_id));
+}
+
+// ============================================================================
+//  Sync Engine, WAL & Huffman Compression APIs (Division 1)
+// ============================================================================
+
+extern "C" size_t eduroute_wal_pending_count (const EduRouteEngine *engine) {
+    if (!engine || !engine->wal.is_open ()) return 0u;
+    return engine->wal.pending_count ();
+}
+
+extern "C" uint64_t eduroute_wal_last_sequence (const EduRouteEngine *engine) {
+    if (!engine || !engine->wal.is_open ()) return 0u;
+    return engine->wal.last_sequence ();
+}
+
+extern "C" uint64_t eduroute_wal_acknowledged_sequence (const EduRouteEngine *engine) {
+    if (!engine || !engine->wal.is_open ()) return 0u;
+    return engine->wal.acknowledged_sequence ();
+}
+
+extern "C" int eduroute_wal_acknowledge (EduRouteEngine *engine, uint64_t sequence) {
+    if (!engine || !engine->wal.is_open ()) return 0;
+    return engine->wal.acknowledge (sequence) ? 1 : 0;
+}
+
+extern "C" int eduroute_wal_peek_next (const EduRouteEngine *engine, uint64_t *out_sequence, uint32_t *out_student_id,
+                                       uint64_t *out_timestamp_ms, size_t *out_original_size,
+                                       size_t *out_compressed_bytes, size_t *out_delta_count) {
+    if (!engine || !engine->wal.is_open ()) return 0;
+    const sync_engine::WalRecord *rec = nullptr;
+    if (!engine->wal.peek_next (rec) || !rec) return 0;
+
+    if (out_sequence) *out_sequence = rec->sequence;
+    if (out_student_id) *out_student_id = rec->student_id;
+    if (out_timestamp_ms) *out_timestamp_ms = rec->timestamp_ms;
+    if (out_original_size) *out_original_size = rec->compressed.original_size;
+    if (out_compressed_bytes) *out_compressed_bytes = rec->compressed.bytes.size ();
+    if (out_delta_count) *out_delta_count = rec->compressed.delta_count;
+    return 1;
+}
+
+extern "C" int eduroute_wal_append_unacked (EduRouteEngine *engine, uint32_t student_id, uint16_t question_id,
+                                            uint64_t timestamp_ms, const char *old_text, const char *new_text,
+                                            uint64_t *out_sequence) {
+    if (!engine || !engine->wal.is_open ()) return 0;
+    engine->scratch_arena.reset ();
+    sync_engine::TextDeltaArray deltas (engine->scratch_arena);
+    sync_engine::generate_text_delta (question_id, core::StringView (old_text ? old_text : ""),
+                                      core::StringView (new_text ? new_text : ""), deltas);
+    if (deltas.size () == 0) return 0;
+    sync_engine::CompressedTextDelta comp = sync_engine::compress_text_delta (engine->scratch_arena, deltas);
+    if (!comp.valid) return 0;
+
+    core::u64 seq = 0;
+    if (!engine->wal.append (student_id, timestamp_ms, comp, &seq)) return 0;
+
+    engine->total_original_bytes += comp.original_size;
+    engine->total_compressed_bytes += comp.bytes.size ();
+    engine->total_deltas_compressed += 1;
+
+    if (out_sequence) *out_sequence = seq;
+    // Intentionally NOT acknowledged, leaving it pending on disk!
+    return 1;
+}
+
+extern "C" int eduroute_wal_recover_and_apply_next (EduRouteEngine *engine, uint64_t *out_sequence,
+                                                    uint32_t *out_student_id, char *out_text_buf, size_t buf_cap,
+                                                    size_t *out_text_len) {
+    if (!engine || !engine->wal.is_open ()) return 0;
+    const sync_engine::WalRecord *rec = nullptr;
+    if (!engine->wal.peek_next (rec) || !rec) return 0;
+
+    if (out_sequence) *out_sequence = rec->sequence;
+    if (out_student_id) *out_student_id = rec->student_id;
+
+    engine->scratch_arena.reset ();
+    core::Array<core::u8> text_storage (engine->scratch_arena, 4096u);
+    sync_engine::TextDeltaArray deltas =
+            sync_engine::decompress_text_delta (engine->scratch_arena, rec->compressed, text_storage);
+
+    if (deltas.size () > 0) {
+        const auto &d = deltas[0];
+        if (out_text_len) *out_text_len = d.new_value.size ();
+        if (out_text_buf && buf_cap > 0) {
+            const core::usize to_copy = d.new_value.size () < buf_cap ? d.new_value.size () : buf_cap - 1;
+            if (to_copy > 0 && d.new_value.data ()) { std::memcpy (out_text_buf, d.new_value.data (), to_copy); }
+            out_text_buf[to_copy] = '\0';
+        }
+    } else {
+        if (out_text_len) *out_text_len = 0;
+        if (out_text_buf && buf_cap > 0) out_text_buf[0] = '\0';
+    }
+
+    // Mark as acknowledged after recovery
+    engine->wal.acknowledge (rec->sequence);
+    return 1;
+}
+
+extern "C" size_t eduroute_compress_delta (EduRouteEngine *engine, uint32_t answer_id, const char *old_text,
+                                           const char *new_text, size_t *out_original_size, size_t *out_bit_length) {
+    if (!engine) return 0u;
+    engine->scratch_arena.reset ();
+    sync_engine::TextDeltaArray deltas (engine->scratch_arena);
+    sync_engine::generate_text_delta (answer_id, core::StringView (old_text ? old_text : ""),
+                                      core::StringView (new_text ? new_text : ""), deltas);
+    if (deltas.size () == 0) {
+        if (out_original_size) *out_original_size = 0u;
+        if (out_bit_length) *out_bit_length = 0u;
+        return 0u;
+    }
+    sync_engine::CompressedTextDelta comp = sync_engine::compress_text_delta (engine->scratch_arena, deltas);
+    if (!comp.valid) return 0u;
+
+    if (out_original_size) *out_original_size = comp.original_size;
+    if (out_bit_length) *out_bit_length = comp.bit_length;
+    return comp.bytes.size ();
+}
+
+extern "C" void eduroute_get_compression_stats (const EduRouteEngine *engine, size_t *out_total_orig_bytes,
+                                                size_t *out_total_comp_bytes, size_t *out_total_deltas,
+                                                float *out_avg_savings_pct) {
+    if (!engine) return;
+    if (out_total_orig_bytes) *out_total_orig_bytes = engine->total_original_bytes;
+    if (out_total_comp_bytes) *out_total_comp_bytes = engine->total_compressed_bytes;
+    if (out_total_deltas) *out_total_deltas = engine->total_deltas_compressed;
+    if (out_avg_savings_pct) {
+        if (engine->total_original_bytes > 0 && engine->total_original_bytes >= engine->total_compressed_bytes) {
+            *out_avg_savings_pct =
+                    static_cast<float> ((1.0 - static_cast<double> (engine->total_compressed_bytes) /
+                                                       static_cast<double> (engine->total_original_bytes)) *
+                                        100.0);
+        } else {
+            *out_avg_savings_pct = 0.0f;
+        }
+    }
+}
+
+extern "C" EduIngestResult eduroute_ingest_recovered_answer (EduRouteEngine *engine, uint32_t student_id,
+                                                             uint16_t question_id, uint8_t action_type,
+                                                             uint8_t mcq_option, uint32_t monotonic_dt_ms,
+                                                             const char *full_text, size_t text_len,
+                                                             uint64_t server_recv_ms) {
+    if (!engine) return make_error_result (static_cast<core::u8> (core::StatusCode::InvalidState));
+
+    engine->scratch_arena.reset ();
+    core::usize buf_cap = sizeof (EduWireHeader) + text_len + 64;
+    auto *wire_buf      = static_cast<core::u8 *> (engine->scratch_arena.allocate (buf_cap, alignof (core::u64)));
+    if (!wire_buf) return make_error_result (static_cast<core::u8> (core::StatusCode::OutOfMemory));
+
+    core::usize packet_sz =
+            eduroute_build_wire_packet (engine, student_id, question_id, action_type, mcq_option, monotonic_dt_ms,
+                                        full_text, static_cast<uint32_t> (text_len), wire_buf, buf_cap);
+    if (packet_sz == 0) return make_error_result (static_cast<core::u8> (core::StatusCode::CorruptedPayload));
+
+    return eduroute_ingest_packet (engine, wire_buf, packet_sz, server_recv_ms);
 }
