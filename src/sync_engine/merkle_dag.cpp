@@ -10,10 +10,9 @@ namespace sync_engine {
         constexpr core::u32 FILE_VERSION     = 1;
         constexpr core::u32 MAX_ANSWER_BYTES = 16u * 1024u * 1024u;
 
-        // The on-disk record is encoded field-by-field in little-endian form.
-        // Layout: magic[4], version[u32], student[u32], question[u16],
-        //         timestamp[u64], parent[u64], node[u64], answer_len[u32],
-        //         checksum[u64], answer[answer_len].
+        // Binary record layout (little-endian wire format):
+        // magic[4], version[4], student[4], question[2], timestamp[8],
+        // parent[8], node_hash[8], answer_len[4], checksum[8] = 46 bytes, then answer payload
         constexpr core::usize RECORD_HEADER_SIZE = 4 + 4 + 4 + 2 + 8 + 8 + 8 + 4 + 8;
 
         void put_u16 (core::u8 *out, core::u16 value) noexcept {
@@ -40,6 +39,7 @@ namespace sync_engine {
             return value;
         }
 
+        // records the checksum
         core::Hash64 record_checksum (const core::u8 *header_without_checksum, const core::u8 *answer,
                                       core::usize answer_len) noexcept {
             core::u8 fixed[RECORD_HEADER_SIZE - 8]{};
@@ -83,10 +83,12 @@ namespace sync_engine {
 
     bool MerkleDAG::is_open () const noexcept { return file_ != nullptr; }
 
+
+    // how many hash calculating routines do we have accross the codebase?
     core::Hash64 MerkleDAG::calculate_hash (core::StudentId student_id, core::QuestionId question_id,
                                             core::Hash64 parent_hash, core::TimestampMs timestamp_ms,
                                             core::StringView full_answer) noexcept {
-        // Canonical little-endian encoding avoids hashing struct padding or pointers.
+        // Pack into explicit byte layout first so compiler padding doesn't poison the hash
         core::u8 fixed[4 + 2 + 8 + 8 + 4]{};
         put_u32 (fixed, student_id);
         put_u16 (fixed + 4, question_id);
@@ -127,7 +129,6 @@ namespace sync_engine {
         node.timestamp_ms = timestamp_ms;
         node.answer       = core::StringView (owned, answer.size ());
 
-        // Array is arena-backed and grows by allocating a larger block.
         nodes_.push_back (node);
         return true;
     }
@@ -165,7 +166,7 @@ namespace sync_engine {
         }
 
         if (!append_memory (student_id, question_id, timestamp_ms, parent, hash, full_answer)) {
-            // In-memory allocation failed.
+            // failed to grab memory in arena
             return false;
         }
 
@@ -173,6 +174,8 @@ namespace sync_engine {
         return true;
     }
 
+
+    // reads all
     bool MerkleDAG::read_all () noexcept {
         if (!file_) return false;
         nodes_.clear ();
@@ -184,7 +187,7 @@ namespace sync_engine {
             const core::usize got = std::fread (header, 1, sizeof (header), file_);
             if (got == 0 && std::feof (file_)) break;
 
-            // A torn final write is ignored; earlier complete records remain usable.
+            // Torn / incomplete record at end of file - stop replay here and keep what was valid
             if (got != sizeof (header)) break;
             if (std::memcmp (header, FILE_MAGIC, 4) != 0 || get_u32 (header + 4) != FILE_VERSION) return false;
 
@@ -212,7 +215,7 @@ namespace sync_engine {
 
             if (expected_hash != stored_hash || expected_checksum != stored_checksum) return false;
 
-            // Verify the chain for this exact student/question stream.
+            // Integrity check: verify hash chain links directly back to previous revision
             if (current_head (student_id, question_id) != parent) return false;
 
             MerkleNode node{};
@@ -225,7 +228,7 @@ namespace sync_engine {
             nodes_.push_back (node);
         }
 
-        // Resume appending at end, after any torn final record.
+        // Ready file cursor for new appends
         if (std::fseek (file_, 0, SEEK_END) != 0) return false;
         return true;
     }

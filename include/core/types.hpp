@@ -54,6 +54,8 @@ namespace core {
     constexpr Hash64 ROOT_DAG_HASH           = 0ULL;
     constexpr u32 MAX_SCORE_BUCKET           = 10000U;
 
+
+    // this works
     template<typename T>
     struct RemoveReference {
             using Type = T;
@@ -138,6 +140,10 @@ namespace core {
     };
 
 
+    // Leaderboard key with 3-level tie-breaking:
+    // 1. highest scaled score wins
+    // 2. lower total time wins
+    // 3. lower student id breaks exact ties (guarantees strict unique ordering in AVL tree)
     struct LeaderboardKey {
             i32 scaled_score;
             u32 total_time_ms;

@@ -6,6 +6,7 @@
 
 namespace core {
     template<typename T>
+    // vector with T.C T
     class Array {
             static_assert (std::is_trivially_copyable_v<T>, "T must be trivially copyable");
 

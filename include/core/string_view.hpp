@@ -7,6 +7,7 @@
 
 
 namespace core {
+    // Non Memory Owning String Class
     class StringView {
         private:
             const char *data_{nullptr};

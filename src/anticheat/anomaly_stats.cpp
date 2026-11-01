@@ -46,8 +46,7 @@ namespace core::anticheat {
     }
 
     void AnomalyStats::clear () noexcept {
-        // We cannot call destructors or free map memory individually (arena model).
-        // Reset is only meaningful if the caller resets the arena too.
+        // Memory lives in arena, so caller does the reset
         ready_ = false;
     }
 
@@ -68,8 +67,7 @@ namespace core::anticheat {
             ps->err_score += err_delta;
         }
 
-        // Determine which of a/b is the "other" relative to whichever caller placed us.
-        // We always emit a match describing "b as other" (canonical order is handled above).
+        // Always report b as the peer from a's viewpoint
         if (ps != nullptr) {
             StatAnomalyMatch m{b, ps->time_score, ps->err_score};
             out_matches.push_back (m);
@@ -88,31 +86,15 @@ namespace core::anticheat {
 
         const u64 my_key = dt_key (qid, sid);
 
-        // Collect all existing (qid, *) entries from dt_index_ by iterating
-        // through a scratch array of (sid, dt) we find per question.
-        // Because HashMap doesn't support prefix iteration, we store dt entries
-        // keyed by (qid<<32|sid) and rely on the fact that for a given question
-        // the key space is qid<<32 | [0..max_students).  We do a linear scan
-        // of the internal slots – this is intentional and acceptable because
-        // the number of students per question is bounded by max_students, and
-        // we only do it once per submission event.
-
-        // We iterate through the raw slots of dt_index_ by probing with a
-        // scratch list of other students we have recorded for this qid.
-        // To avoid O(capacity) iteration we maintain a per-question submission
-        // list via the mcq_index_ reuse pattern below, using a separate
-        // "dt posting list" embedded in the scratch arena.
-
-        // Scratch: collect (sid, dt) pairs for this question.
-        // We build a tiny parallel structure: one PostingNode list per qid stored
-        // through the mcq_index_ channel keyed with a synthetic option = 0xFF.
+        // Keep a lightweight per-question student linked list (using sentinel option 0xFE)
+        // so we don't have to scan the entire hash table for peers on every submission.
         constexpr u8 DT_SENTINEL_OPTION = 0xFEu;
         const u32 list_key              = mcq_key (qid, DT_SENTINEL_OPTION);
 
         McqPostingNode **list_head_slot = mcq_index_->find (list_key);
         McqPostingNode *list_head       = list_head_slot ? *list_head_slot : nullptr;
 
-        // Compare against every previously recorded student for this question.
+        // Check elapsed time against peers who answered this question
         for (McqPostingNode *cur = list_head; cur != nullptr; cur = cur->next) {
             if (cur->student_id == sid) continue;
 
@@ -177,13 +159,13 @@ namespace core::anticheat {
             ++(*opt_cnt);
         }
 
-        // Only flag if the chosen option is wrong.
+        // Correct answers are obviously not suspicious
         if (chosen_option == correct_option) {
             (void) scratch;
             return;
         }
 
-        // Check if this option is "rare".
+        // Rare error check: only flag if picked by < 10% of test-takers
         const u32 this_opt_count = opt_cnt ? *opt_cnt : 1u;
         const f32 freq           = (total_submissions > 0u)
                                            ? static_cast<f32> (this_opt_count) / static_cast<f32> (total_submissions)
@@ -191,11 +173,10 @@ namespace core::anticheat {
 
         if (freq >= RARE_ERROR_FREQ_THRESHOLD) {
             (void) scratch;
-            return; // Not rare enough to be suspicious
+            return; // common trap / distractor option, ignore
         }
 
-        // Walk the posting list for (qid, chosen_option): these are all students
-        // who also chose this rare wrong option.
+        // Check against anyone else who picked this exact rare mistake
         const u32 plist_key        = mcq_key (qid, chosen_option);
         McqPostingNode **head_slot = mcq_index_->find (plist_key);
         McqPostingNode *head       = head_slot ? *head_slot : nullptr;
@@ -205,7 +186,7 @@ namespace core::anticheat {
             add_pair_hit (sid, cur->student_id, 0.0f, ERR_HIT_WEIGHT, out_matches);
         }
 
-        // Append this student to the posting list (if not already present).
+        // Add this student to the list for this rare choice
         bool already_listed = false;
         for (McqPostingNode *cur = head; cur != nullptr; cur = cur->next) {
             if (cur->student_id == sid) {

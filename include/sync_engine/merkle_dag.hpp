@@ -9,8 +9,8 @@
 
 namespace sync_engine {
 
-    // A full answer snapshot in the per-(student, question) Merkle history.
-    // answer.data is owned by the Arena supplied to MerkleDAG.
+    // Snapshot node in the per-(student, question) revision history
+    // answer string data is arena-backed
     struct MerkleNode {
             core::StudentId student_id;
             core::QuestionId question_id;
@@ -30,34 +30,27 @@ namespace sync_engine {
             MerkleDAG (const MerkleDAG &)            = delete;
             MerkleDAG &operator= (const MerkleDAG &) = delete;
 
-            // Opens/creates the append-only snapshot file and replays valid records.
-            // Returns false if the file cannot be opened or contains an invalid header.
+            // Open disk backing file and recover past revisions
             bool open (const char *filepath);
 
-            // Closes the backing file. In-memory nodes remain valid until the Arena is reset.
             void close () noexcept;
-
             bool is_open () const noexcept;
 
-            // Adds a complete answer snapshot. The previous snapshot for this exact
-            // student/question pair becomes parent. The newest five remain queryable.
-            // A successful return means the record was written and flushed to disk.
+            // Append revision node linked to previous head, commits to disk
             bool append (core::StudentId student_id, core::QuestionId question_id, core::TimestampMs timestamp_ms,
                          core::StringView full_answer, core::Hash64 *out_hash = nullptr);
 
-            // Returns the current/latest snapshot for this student/question.
+            // Get most recent answer for this question
             bool latest (core::StudentId student_id, core::QuestionId question_id, MerkleNode &out) const noexcept;
 
-            // Returns the Nth newest retained snapshot: index 0 is latest.
+            // Get previous revision (0 = newest/latest)
             bool history (core::StudentId student_id, core::QuestionId question_id, core::usize newest_index,
                           MerkleNode &out) const noexcept;
 
-            // Number of retained snapshots for this pair (maximum HISTORY_LIMIT).
             core::usize history_size (core::StudentId student_id, core::QuestionId question_id) const noexcept;
-
             core::usize node_count () const noexcept;
 
-            // Deterministic hash over explicitly serialized fields and answer bytes.
+            // Deterministic hash: parent_hash + metadata + answer content
             static core::Hash64 calculate_hash (core::StudentId student_id, core::QuestionId question_id,
                                                 core::Hash64 parent_hash, core::TimestampMs timestamp_ms,
                                                 core::StringView full_answer) noexcept;

@@ -1,7 +1,9 @@
 """
-Pre-calibrated Question Bank for EduRoute
-Maps question IDs to metadata and question text.
-Registers into the C++ backend QuestionBank via eduroute_register_question.
+EduRoute Question Bank
+
+Pre-calibrated question pool across core CSE subjects (DSA, OS, Networks).
+Difficulty ratings (beta parameters) follow standard Item Response Theory (IRT)
+calibration so the adaptive engine can tailor question difficulty to student ability.
 """
 
 TOPICS = {
@@ -200,7 +202,7 @@ QUESTION_BANK = [
         ]
     },
 
-    # Descriptive / Subjective Questions (Tests TextDelta, k-mer Winnowing & Plagiarism)
+    # Long-form / essay prompts for testing text diffing and k-mer winnowing
     {
         "id": 16,
         "topic_id": 0,

@@ -5,25 +5,10 @@
 
 namespace adaptive_rank {
 
-    /**
-     * FenwickScore - live leaderboard counter over score buckets 0..MAX_SCORE_BUCKET.
-     *
-     * Answers "what is the rank / percentile of this score?" in ~14 steps instead of
-     * looping over every student. Rank 1 = best score; equal scores share a rank.
-     *
-     * RULES
-     *  - Call init(arena) once. Memory (~80 KB) comes from the arena and is never freed singly.
-     *  - Every function that can fail returns core::StatusCode (never crashes, never throws).
-     *  - Scores outside 0..MAX_SCORE_BUCKET are CLAMPED into range everywhere (queries too),
-     *    so a bad score can never read/write out of bounds.
-     *  - Not thread-safe (one instance per thread, like the Arena).
-     *
-     * Status codes used:
-     *    Ok            success
-     *    InvalidState  used before init(), or counter overflow
-     *    OutOfMemory   arena too small in init()
-     *    KeyNotFound   remove()/update() of a score nobody has, or rank outside 1..total
-     */
+    // Binary Indexed Tree maintaining live score distributions across 0..MAX_SCORE_BUCKET.
+    // Gives O(log B) rank and percentile queries without scanning student arrays.
+    // Scores outside the valid bucket range are clamped defensively.
+    // Backed by arena memory; error states return core::StatusCode.
     class FenwickScore {
         public:
             static constexpr core::u32 kBuckets = core::MAX_SCORE_BUCKET + 1U;

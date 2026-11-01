@@ -1,7 +1,9 @@
 """
 EduRoute Web Application
-Simple, low-bandwidth Flask frontend strictly using the C ABI (libeduroute.so).
-Designed for low-end hardware and low internet bandwidth.
+
+Lightweight Flask interface wired directly to libeduroute.so via ctypes.
+Serves the adaptive test view, real-time leaderboard, and anti-cheat monitor
+with minimal asset payload so it runs smoothly even on low-end hardware.
 """
 
 import os
@@ -17,12 +19,12 @@ app = Flask(__name__)
 app.secret_key = "eduroute_local_secret_key"
 
 # -----------------------------------------------------------------------------
-# 1. Global C++ Engine Bridge Initialization
+# Global C++ Engine Initialization
 # -----------------------------------------------------------------------------
 WAL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eduroute_wal.bin")
 engine = EduRouteBridge(max_students=500, max_questions=len(QUESTION_BANK) + 10, wal_path=WAL_FILE)
 
-# Register all questions into the C++ backend Question Bank
+# Seed C++ question bank with our curriculum
 for q in QUESTION_BANK:
     engine.register_question(
         question_id=q["id"],
@@ -32,8 +34,8 @@ for q in QUESTION_BANK:
         correct_mcq_option=int(q["correct_mcq_option"])
     )
 
-# In-memory student session cache (student_id -> state dict)
-# C++ backend remains single source of truth for scores, rank, theta, and DSU clusters.
+# Minimal session cache for the web UI layer (routing & question index).
+# The C++ core retains authoritative state for scoring, ranking, and anti-cheat.
 STUDENT_SESSIONS = {}
 
 def get_or_create_student_session(student_id: int) -> dict:
@@ -53,7 +55,7 @@ def get_or_create_student_session(student_id: int) -> dict:
     return STUDENT_SESSIONS[student_id]
 
 # -----------------------------------------------------------------------------
-# 2. Web Routes
+# UI & Exam Routes
 # -----------------------------------------------------------------------------
 
 @app.route("/")
@@ -219,14 +221,14 @@ def questions():
     )
 
 # -----------------------------------------------------------------------------
-# 3. Demonstration & Simulation Endpoints
+# Simulation & Demonstration Endpoints
 # -----------------------------------------------------------------------------
 
 @app.route("/api/simulate_collusion", methods=["POST"])
 def simulate_collusion():
     """
-    Demonstrates the anticheat engine by simulating two students (#10 and #11)
-    submitting the same plagiarized answer text with synchronous timing on Question #16.
+    Demonstrates the anti-cheat pipeline: students 10 and 11 submit
+    the exact same essay text with nearly identical timestamps.
     """
     text_plagiarized = (
         "Disjoint Set Union maintains partitioned subsets with find returning root "
@@ -234,7 +236,7 @@ def simulate_collusion():
     )
     t_now = int(time.time() * 1000)
 
-    # Student 10 submits
+    # Student 10 submits first
     engine.submit_answer(
         student_id=10,
         question_id=16,
@@ -245,7 +247,7 @@ def simulate_collusion():
         server_recv_ms=t_now
     )
 
-    # Student 11 submits identical text 10ms later (suspicious delta sync + identical k-mers)
+    # Student 11 submits identical text 10ms later (triggers k-mer match + DSU edge)
     engine.submit_answer(
         student_id=11,
         question_id=16,
@@ -261,7 +263,7 @@ def simulate_collusion():
 @app.route("/api/simulate_students", methods=["POST"])
 def simulate_students():
     """
-    Simulates 5 legitimate random students answering questions to populate the leaderboard.
+    Simulates a batch of random students answering questions to populate leaderboard.
     """
     t_now = int(time.time() * 1000)
     sample_ids = random.sample(range(20, 99), 5)
@@ -313,9 +315,8 @@ def api_compress_demo():
 @app.route("/api/sync_offline", methods=["POST"])
 def api_sync_offline():
     """
-    Receives an array of offline queued submissions stored in browser disk (localStorage).
-    Ingests each into the C++ engine (WAL + Huffman + Merkle DAG + AntiCheat + IRT)
-    and returns updated score, live rank, and sync confirmation.
+    Ingests an array of offline queued submissions stored in browser localStorage.
+    Replays each into the C++ engine (WAL + Huffman + Merkle DAG + AntiCheat + IRT).
     """
     data = request.get_json(silent=True)
     if not data or "submissions" not in data:
@@ -377,14 +378,14 @@ def api_sync_offline():
 @app.route("/api/simulate_offline_sync", methods=["POST"])
 def simulate_offline_sync():
     """
-    Demonstrates offline resilience: Student #99 was disconnected from internet,
-    buffered 3 answers to local disk storage, and now reconnects and syncs!
+    Demonstrates offline resilience: student 99 loses network connection,
+    buffers 3 answers to local storage, then reconnects and flushes the buffer.
     """
     sid = 99
     session = get_or_create_student_session(sid)
     t_now = int(time.time() * 1000)
 
-    # Question 1: MCQ Answer (stored offline on disk)
+    # Question 1: MCQ answer queued while offline
     engine.submit_answer(
         student_id=sid, question_id=1,
         action_type=EduRouteBridge.ACTION_MCQ,
@@ -392,7 +393,7 @@ def simulate_offline_sync():
         server_recv_ms=t_now
     )
 
-    # Question 2: Descriptive text Draft 1 (stored offline on disk)
+    # Question 2: Initial essay draft
     txt1 = "Adjacency list uses dyn_array of vertices to minimize memory."
     engine.submit_answer(
         student_id=sid, question_id=16,
@@ -401,7 +402,7 @@ def simulate_offline_sync():
         full_text=txt1, server_recv_ms=t_now + 100
     )
 
-    # Question 2: Descriptive text Revision 2 (stored offline on disk, Huffman compressed delta)
+    # Question 2: Edited essay draft (Huffman delta compressed)
     txt2 = "Adjacency list uses dyn_array of vertices to minimize memory and enables O(V+E) graph traversal."
     res = engine.submit_answer(
         student_id=sid, question_id=16,
@@ -422,10 +423,9 @@ def simulate_offline_sync():
 @app.route("/api/simulate_wal_restart", methods=["POST"])
 def simulate_wal_restart():
     """
-    Demonstrates backend WAL crash recovery from disk:
-    1. Appends unacknowledged WAL record representing an interrupted connection
-    2. Simulates server crash & reboot
-    3. Replays WAL from disk, decompresses Huffman delta, and commits ACK.
+    Simulates a mid-flight server crash:
+    Appends an unacknowledged WAL record representing an interrupted connection,
+    restarts, then recovers and decompresses the Huffman delta from disk.
     """
     sid = 88
     t_now = int(time.time() * 1000)

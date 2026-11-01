@@ -1,8 +1,7 @@
-/**
- * EduRoute Stress & High-Load Simulator
- * Simulates high-throughput concurrent student exam submissions,
- * injects collusion rings, and validates AVL/Fenwick/DSU invariants under load.
- * STRICTLY NO STL CONTAINERS (No std::vector, std::string, std::map).
+/*
+ * Stress testing simulator for EduRoute engine
+ * Simulates concurrent student exam submissions, injects deliberate
+ * collusion rings to test anti-cheat, and validates AVL tree invariants.
  */
 
 #include <chrono>
@@ -17,7 +16,7 @@
 #include "core/types.hpp"
 #include "eduroute_c_api.h"
 
-// Simple LCG pseudo-random generator (reproducible)
+// Simple LCG pseudo-random generator (reproducible seed)
 struct SimpleRng {
         core::u64 state;
         explicit SimpleRng (core::u64 seed = 123356789ULL) : state (seed) {}
@@ -48,14 +47,14 @@ int main () {
     std::remove (stress_dag_path);
     std::remove (stress_ring_wal);
 
-    // 1. Create engine with WAL & Merkle DAG disk persistence
+    // Initialize engine with backing WAL and Merkle DAG files
     EduRouteEngine *engine = eduroute_create (NUM_STUDENTS, NUM_QUESTIONS + 5, stress_wal_path);
     if (!engine) {
         std::printf ("[FATAL] Failed to create EduRouteEngine.\n");
         return 1;
     }
 
-    // 2. Register 20 questions in Question Bank
+    // Register test questions into bank
     for (core::u16 qid = 1; qid <= NUM_QUESTIONS; ++qid) {
         float beta           = 700.0f + static_cast<float> (qid) * 50.0f;
         core::u8 correct_opt = static_cast<core::u8> (qid % 4);
@@ -63,10 +62,7 @@ int main () {
     }
     std::printf ("[SETUP] Registered %u calibrated questions.\n", NUM_QUESTIONS);
 
-    // 3. Define Cheating Rings:
-    // Ring 1: Students 10 & 11
-    // Ring 2: Students 20, 21 & 22 (Triple collusion)
-    // Ring 3: Students 30 & 31
+    // Sample essay responses for testing text winnowing detection
     const char *plagiarized_texts[3] = {
             "Fast Fourier transform computes discrete Fourier transform in O(n log n) time",
             "Red-Black tree rebalances with rotations and color flips maintaining logarithmic depth",
@@ -77,36 +73,34 @@ int main () {
     core::u32 total_packets = 0;
     core::u8 wire_buf[1024];
 
-    // 4. Simulate Exam Rounds
-    // Each student answers up to 8 questions
+    // Simulate multi-round student submission traffic (8 questions per student)
     constexpr core::u32 QUESTIONS_PER_STUDENT = 8;
     for (core::u32 round = 0; round < QUESTIONS_PER_STUDENT; ++round) {
         for (core::u32 sid = 0; sid < NUM_STUDENTS; ++sid) {
             core::u16 qid = static_cast<core::u16> ((sid + round) % NUM_QUESTIONS + 1);
             core::u32 dt  = rng.range (3000, 25000);
 
-            // Collusion injection
             const char *text_ptr = nullptr;
             core::u32 text_len   = 0;
             core::u8 action      = 0; // MCQ
             core::u8 mcq_opt     = static_cast<core::u8> (rng.range (0, 3));
 
+            // Inject collusion ring 1: students 10 and 11 submit same text within 25ms
             if ((sid == 10 || sid == 11) && round == 2) {
-                // Ring 1 text collusion on Q5
                 qid      = 5;
                 text_ptr = plagiarized_texts[0];
                 text_len = static_cast<core::u32> (std::strlen (text_ptr));
                 action   = 1;                           // TextDelta
                 dt       = (sid == 10) ? 12000 : 12025; // Synchronous timing
             } else if ((sid == 20 || sid == 21 || sid == 22) && round == 3) {
-                // Ring 2 triple collusion on Q7
+                // Inject collusion ring 2: 3-way cheating cluster on Q7
                 qid      = 7;
                 text_ptr = plagiarized_texts[1];
                 text_len = static_cast<core::u32> (std::strlen (text_ptr));
                 action   = 1;
-                dt       = 15000 + (sid - 20) * 15; // Within 500ms
+                dt       = 15000 + (sid - 20) * 15; // Tight time window (< 500ms)
             } else if ((sid == 30 || sid == 31) && round == 4) {
-                // Ring 3 text collusion on Q9
+                // Inject collusion ring 3: students 30 and 31 on Q9
                 qid      = 9;
                 text_ptr = plagiarized_texts[2];
                 text_len = static_cast<core::u32> (std::strlen (text_ptr));
@@ -134,7 +128,7 @@ int main () {
     std::printf ("  Ingest Throughput      : %.1f operations / second\n", throughput);
     std::printf ("  Average Latency        : %.2f microseconds / packet\n", (elapsed_sec / total_packets) * 1e6);
 
-    // 5. Validate Leaderboard Ordering & Tie-Breaking
+    // Verify leaderboard sorting and tie-breaking invariants
     constexpr core::u32 LEADERBOARD_QUERY = 50;
     EduLeaderboardRow rows[LEADERBOARD_QUERY];
     core::usize num_rows = eduroute_get_top_k (engine, rows, LEADERBOARD_QUERY);
@@ -162,7 +156,7 @@ int main () {
         std::printf ("  [PASS] Order-Statistic AVL Tree maintained perfect descending score and time order!\n");
     }
 
-    // 6. Validate Anti-Cheat Collusion Clusters
+    // Check confirmed collusion edges
     std::printf ("\n[ANTI-CHEAT CLUSTER CHECK]\n");
     constexpr core::usize MAX_EDGES = 256;
     EduCollusionEdge edges[MAX_EDGES];
@@ -188,7 +182,7 @@ int main () {
     if (ring2_found) std::printf ("  [PASS] Cheating Ring 2 (Students 20, 21, 22) detected!\n");
     if (ring3_found) std::printf ("  [PASS] Cheating Ring 3 (Students 30 & 31) detected!\n");
 
-    // 7. Sync Engine, Huffman Compression & WAL Persistence Telemetry
+    // Print compression and sync metrics
     size_t orig_b = 0, comp_b = 0, deltas_c = 0;
     float savings_pct = 0.0f;
     eduroute_get_compression_stats (engine, &orig_b, &comp_b, &deltas_c, &savings_pct);
@@ -208,7 +202,7 @@ int main () {
                  static_cast<unsigned long long> (wal_last_seq), static_cast<unsigned long long> (wal_acked_seq),
                  wal_pending);
 
-    // 8. Arena Memory Efficiency Check
+    // Arena memory usage
     core::usize arena_used = eduroute_get_arena_Memory_used (engine);
     std::printf ("\n[MEMORY FOOTPRINT]\n");
     std::printf ("  Persistent + Scratch Memory Used: %zu bytes (%.2f KB)\n", arena_used,
@@ -216,7 +210,7 @@ int main () {
 
     eduroute_destroy (engine);
 
-    // 9. Reboot & On-Disk Recovery Check
+    // Crash recovery test: spin up a fresh engine and check that state is reloaded from disk
     EduRouteEngine *rebooted = eduroute_create (NUM_STUDENTS, NUM_QUESTIONS + 5, stress_wal_path);
     bool recovery_ok         = (rebooted != nullptr);
     if (recovery_ok) {

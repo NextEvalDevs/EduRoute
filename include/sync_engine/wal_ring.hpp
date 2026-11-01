@@ -9,8 +9,7 @@
 
 namespace sync_engine {
 
-    // One pending synchronization batch.
-    // All compressed data is owned by the WAL's Arena.
+    // In-memory representation of a persisted WAL entry
     struct WalRecord {
             core::u64 sequence;
             core::StudentId student_id;
@@ -30,21 +29,20 @@ namespace sync_engine {
             WriteAheadLog (const WriteAheadLog &)            = delete;
             WriteAheadLog &operator= (const WriteAheadLog &) = delete;
 
-            // Opens or creates the WAL and replays existing records.
+            // Open WAL file on disk and recover un-ACKed state
             bool open (const char *filepath);
 
             void close () noexcept;
             bool is_open () const noexcept;
 
-            // Persists one compressed batch.
+            // Append new compressed batch to disk WAL
             bool append (core::StudentId student_id, core::TimestampMs timestamp_ms,
                          const CompressedTextDelta &compressed, core::u64 *out_sequence = nullptr);
 
-            // Returns the oldest unacknowledged record.
-            // The pointer remains valid until the Arena is reset/destroyed.
+            // Check next un-synced record (oldest sequence > acknowledged_sequence)
             bool peek_next (const WalRecord *&out) const noexcept;
 
-            // Acknowledges every sequence <= sequence.
+            // Mark sequence as synced by the server
             bool acknowledge (core::u64 sequence);
 
             core::usize pending_count () const noexcept;

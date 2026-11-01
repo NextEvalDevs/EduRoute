@@ -6,6 +6,10 @@
 #include "core/types.hpp"
 
 namespace core {
+    /**
+     * Disjoint Set Union
+     * Origin: Folklore
+     */
     class DisjointSet {
         private:
             Array<u32> parent_;

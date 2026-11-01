@@ -7,8 +7,7 @@
 
 namespace sync_engine {
 
-    // A single answer change. Works for both MCQ and descriptive answers.
-    // MCQ values can simply be "A", "B", "C", or "D".
+    // Represents an edit delta between old and new answer states (MCQs use "A".."D")
     struct TextDelta {
             core::u32 answer_id;
             core::StringView old_value;
@@ -17,33 +16,31 @@ namespace sync_engine {
 
     using TextDeltaArray = core::Array<TextDelta>;
 
-    // Huffman-compressed serialized delta.
+    // Compressed delta packet: packed bitstream + 256 frequency weights for rebuilding tree
     struct CompressedTextDelta {
             core::Array<core::u8> bytes;
-            core::Array<core::u32> frequencies; // Always 256 entries.
+            core::Array<core::u32> frequencies; // 256-entry histogram
             core::usize bit_length;
             core::usize original_size;
             core::usize delta_count;
             bool valid;
     };
 
-    // Add a delta only when the answer actually changed.
+    // Compares old vs new text and records delta if anything changed
     void generate_text_delta (core::u32 answer_id, core::StringView old_value, core::StringView new_value,
                               TextDeltaArray &deltas);
 
-    // Serialize answer_id, old text, and new text.
+    // Packs delta array into wire byte buffer
     bool serialize_text_delta (const TextDeltaArray &deltas, core::Array<core::u8> &output);
 
-    // Serialize and Huffman-compress all deltas.
+    // Huffman-encodes serialized deltas
     CompressedTextDelta compress_text_delta (core::Arena &arena, const TextDeltaArray &deltas);
 
-    // Huffman-decompress and deserialize.
-    // Returned StringViews point into text_storage, which must remain alive.
+    // Reconstructs deltas from compressed bitstream (returned string views point into text_storage)
     TextDeltaArray decompress_text_delta (core::Arena &arena, const CompressedTextDelta &compressed,
                                           core::Array<core::u8> &text_storage);
 
-    // Apply one delta if current_value matches the delta's old_value.
-    // The resulting answer is appended to output.
+    // Patches current_value using delta (verifies base text matches old_value first)
     bool apply_text_delta (core::StringView current_value, const TextDelta &delta, core::Array<core::u8> &output);
 
 } // namespace sync_engine

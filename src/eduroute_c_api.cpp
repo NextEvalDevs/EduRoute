@@ -22,56 +22,50 @@ namespace adaptive_rank {
 #include "sync_engine/merkle_dag.hpp"
 #include "sync_engine/wal_ring.hpp"
 
-// ============================================================================
-//  Internal per-student state (stored in the persistent arena)
-// ============================================================================
-
+// Internal student state tracked in persistent arena
 struct StudentState {
-        core::Hash64 dag_head;               // FNV-1a hash of last accepted DAG node
-        core::u32 total_time_ms;             // monotonic accumulated answer time
-        core::i32 scaled_score;              // last computed scaled score
-        core::LeaderboardKey lb_key;         // key currently held in the AVL tree
-        bool in_avl;                         // whether a key is currently in the AVL
-        adaptive_rank::ExamSession *session; // heap pointer into pers_arena
+        core::Hash64 dag_head;               // latest Merkle node hash for this student
+        core::u32 total_time_ms;             // running sum of answer times
+        core::i32 scaled_score;              // scaled 0..10000 score
+        core::LeaderboardKey lb_key;         // composite sort key in AVL tree
+        bool in_avl;                         // is student currently on the leaderboard
+        adaptive_rank::ExamSession *session; // per-student adaptive session
 };
 
-// ============================================================================
-//  EduRouteEngine
-// ============================================================================
-
+// Main engine context - holds arenas and subsystem instances
 struct EduRouteEngine {
-        // --- Arenas ---------------------------------------------------------------
-        core::Arena pers_arena;    // persistent: lives for the whole exam
-        core::Arena scratch_arena; // scratch: reset after each packet
+        // Arenas: persistent holds exam state, scratch is wiped per packet
+        core::Arena pers_arena;
+        core::Arena scratch_arena;
 
-        // --- Div 1: Sync Engine ---------------------------------------------------
+        // Subsystems:
+        // Div 1 - Merkle history & disk WAL ring
         sync_engine::MerkleDAG merkle_dag;
         sync_engine::WriteAheadLog wal;
 
-        // --- Compression Telemetry ------------------------------------------------
+        // Compression counters for dashboard telemetry
         core::usize total_original_bytes;
         core::usize total_compressed_bytes;
         core::usize total_deltas_compressed;
 
-        // --- Div 3: Adaptive Ranking ----------------------------------------------
+        // Div 3 - Adaptive testing, Fenwick percentile, and AVL leaderboard
         adaptive_rank::QuestionBank question_bank;
         adaptive_rank::FenwickScore fenwick;
         adaptive_rank::OrderStatAvl avl;
 
-        // --- Div 2: Anti-Cheat ---------------------------------------------------
+        // Div 2 - Anti-cheat detection (winnowing, timing anomalies, collusion DSU)
         core::anticheat::KmerWinnow kmer;
         core::anticheat::AnomalyStats anomaly;
         core::anticheat::CollusionGraph collusion;
 
-        // --- Student table -------------------------------------------------------
-        StudentState *students; // array[max_students] in pers_arena
+        // Student table
+        StudentState *students;
         core::u32 max_students;
         core::u32 max_questions;
 
-        // --- WAL (simple append-only log) ----------------------------------------
+        // Raw append log
         FILE *wal_fp;
 
-        // Constructor: forward to the two arenas
         EduRouteEngine (core::usize pers_bytes, core::usize scratch_bytes, core::u32 max_s, core::u32 max_q,
                         const char *wal_path) :
             pers_arena (pers_bytes), scratch_arena (scratch_bytes), merkle_dag (pers_arena), wal (pers_arena),
@@ -99,13 +93,9 @@ struct EduRouteEngine {
         }
 };
 
-// ============================================================================
-//  Helpers
-// ============================================================================
-
 namespace {
 
-    // Simple FNV-1a over a byte buffer (same algorithm as core::fnv1a_hash_bytes)
+    // FNV-1a hash over raw memory block
     static core::Hash64 fnv1a (const void *data, core::usize len) noexcept {
         const auto *bytes = static_cast<const core::u8 *> (data);
         core::Hash64 h    = 14695981039346656037ULL;
@@ -116,12 +106,11 @@ namespace {
         return h;
     }
 
-    // Compute the simple MAC16: lower 16 bits of FNV-1a over (header_without_mac | payload).
+    // Packet authentication: 16-bit MAC tag computed over header (minus mac field) + payload
     static core::u16 compute_mac16 (const EduWireHeader *hdr, const core::u8 *payload, core::u16 payload_len) noexcept {
-        // Hash header fields excluding mac_tag16 field itself (last 2 bytes of the 32-byte header).
         constexpr core::usize HDR_NO_MAC = sizeof (EduWireHeader) - sizeof (core::u16);
         core::Hash64 h                   = fnv1a (hdr, HDR_NO_MAC);
-        // Continue hashing over the payload.
+
         const auto *pb = static_cast<const core::u8 *> (static_cast<const void *> (payload));
         for (core::u16 i = 0; i < payload_len; ++i) {
             h ^= static_cast<core::Hash64> (pb[i]);
@@ -130,10 +119,8 @@ namespace {
         return static_cast<core::u16> (h & 0xFFFFu);
     }
 
-    // Clamp a student ID to a valid range.
     static bool valid_student (const EduRouteEngine *eng, core::u32 sid) noexcept { return sid < eng->max_students; }
 
-    // Return a zeroed-out ingest result with the given status.
     static EduIngestResult make_error_result (core::u8 status) noexcept {
         EduIngestResult r{};
         r.status_code      = status;
@@ -143,36 +130,30 @@ namespace {
 
 } // anonymous namespace
 
-// ============================================================================
-//  Lifecycle
-// ============================================================================
-
 extern "C" EduRouteEngine *eduroute_create (uint32_t max_students, uint32_t max_questions, const char *wal_filepath) {
     if (max_students == 0 || max_questions == 0) return nullptr;
 
-    // Estimate arena sizes:
-    //   - per student:  ExamSession (depends on bank; use 4 KB each as upper bound)
-    //                   StudentState (fixed 48 bytes)
-    //   - shared:  QuestionBank, Fenwick, AVL, AntiCheat indexes
+    // Arena budget estimation:
+    // - ~4KB per student for adaptive ExamSession + StudentState struct
+    // - question bank, Fenwick tree, and AVL tree tables
+    // - ~8MB for winnowing index and collusion graph
+    // - 1MB extra safety buffer
     const core::usize per_student_bytes = 4096u + sizeof (StudentState) + 64u;
     const core::usize bank_bytes        = adaptive_rank::QuestionBank::required_bytes (max_questions);
     const core::usize fenwick_bytes     = adaptive_rank::FenwickScore::required_bytes ();
     const core::usize avl_bytes         = adaptive_rank::OrderStatAvl::required_bytes (max_students);
-    const core::usize anticheat_bytes   = 8u * 1024u * 1024u; // 8 MB for indexes & graph
-    const core::usize pers_bytes        = bank_bytes + fenwick_bytes + avl_bytes + anticheat_bytes +
-                                          static_cast<core::usize> (max_students) * per_student_bytes +
-                                          1u * 1024u * 1024u; // 1 MB slack
+    const core::usize anticheat_bytes   = 8u * 1024u * 1024u;
+    const core::usize pers_bytes = bank_bytes + fenwick_bytes + avl_bytes + anticheat_bytes +
+                                   static_cast<core::usize> (max_students) * per_student_bytes + 1u * 1024u * 1024u;
 
-    const core::usize scratch_bytes = 2u * 1024u * 1024u; // 2 MB scratch per packet
+    const core::usize scratch_bytes = 2u * 1024u * 1024u; // 2MB scratch buffer per packet
 
-    // Allocate the engine itself from the OS (not from an arena).
     void *raw = std::malloc (sizeof (EduRouteEngine));
     if (!raw) return nullptr;
 
     auto *eng = ::new (raw) EduRouteEngine (pers_bytes, scratch_bytes, max_students, max_questions, wal_filepath);
 
-    // Init Div 3 structures.
-    // QuestionBank::init needs the arena and capacity
+    // Initialize adaptive test & ranking structures
     if (eng->question_bank.init (eng->pers_arena, max_questions) != core::StatusCode::Ok) {
         eng->~EduRouteEngine ();
         std::free (raw);
@@ -189,7 +170,7 @@ extern "C" EduRouteEngine *eduroute_create (uint32_t max_students, uint32_t max_
         return nullptr;
     }
 
-    // Init Div 2 structures.
+    // Initialize anti-cheat graphs and anomaly trackers
     if (eng->anomaly.init (eng->pers_arena, static_cast<core::usize> (max_students) * 4u) != core::StatusCode::Ok) {
         eng->~EduRouteEngine ();
         std::free (raw);
@@ -202,7 +183,7 @@ extern "C" EduRouteEngine *eduroute_create (uint32_t max_students, uint32_t max_
         return nullptr;
     }
 
-    // Allocate the student state table.
+    // Initialize per-student metadata table in persistent arena
     eng->students = static_cast<StudentState *> (eng->pers_arena.allocate (
             static_cast<core::usize> (max_students) * sizeof (StudentState), alignof (StudentState)));
     if (!eng->students) {
@@ -239,14 +220,13 @@ extern "C" void eduroute_register_question (EduRouteEngine *engine, uint16_t que
     if (!engine) return;
     (void) expected_time_ms; // stored in ExamSession timing; not used in bank directly
 
-    // Map the difficulty from [600,1800] range described in InternalDocs to [-4, +4]
-    // using the linear mapping:  d_irt = (beta - 1200) / 150.0
+    // Linear map: scale exam difficulty (600..1800) to standard IRT range (-4.0..+4.0)
+    // 1200 is neutral baseline (theta 0), 150 points ~= 1 standard deviation
     const double d_irt = (static_cast<double> (difficulty_beta) - 1200.0) / 150.0;
 
-    // Use the public add_calibrated API which derives tier from difficulty.
     engine->question_bank.add_calibrated (static_cast<core::QuestionId> (question_id),
                                           static_cast<core::TopicId> (topic_id), d_irt, correct_mcq_option,
-                                          1.0 /* default discrimination */);
+                                          1.0 /* discrimination parameter */);
 }
 
 // ============================================================================
@@ -303,7 +283,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         return make_error_result (static_cast<core::u8> (core::StatusCode::CorruptedPayload));
     }
 
-    // ---- 1. Parse & verify header -------------------------------------------
+    // 1. Validate header & check MAC authentication tag
     EduWireHeader hdr{};
     std::memcpy (&hdr, wire_packet, sizeof (EduWireHeader));
 
@@ -314,7 +294,6 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         return make_error_result (static_cast<core::u8> (core::StatusCode::CorruptedPayload));
     }
 
-    // Verify MAC.
     const core::u16 expected_mac = compute_mac16 (&hdr, payload, payload_len);
     if (expected_mac != hdr.mac_tag16) {
         return make_error_result (static_cast<core::u8> (core::StatusCode::HashChainMismatch));
@@ -329,21 +308,20 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
 
     StudentState &st = engine->students[sid];
 
-    // ---- 2. Verify hash chain against DAG head ------------------------------
+    // 2. Merkle chain check: parent must match this student's latest node hash
     if (hdr.parent_hash != st.dag_head && st.dag_head != core::ROOT_DAG_HASH) {
-        // Allow the very first submission (dag_head == ROOT_DAG_HASH).
+        // (first submission always starts from ROOT_DAG_HASH)
         return make_error_result (static_cast<core::u8> (core::StatusCode::HashChainMismatch));
     }
 
-    // Advance the DAG head.
     st.dag_head = hdr.node_hash;
 
-    // ---- 3. WAL append (raw frame) ------------------------------------------
+    // 3. Raw WAL dump for full wire replay
     if (engine->wal_fp) { std::fwrite (wire_packet, 1u, sizeof (EduWireHeader) + payload_len, engine->wal_fp); }
 
     const auto action = static_cast<core::ActionType> (hdr.action_type);
 
-    // ---- 3b. Merkle DAG & Huffman Delta WAL Ring append --------------------
+    // 4. Update Merkle DAG history & compute Huffman delta for WAL ring
     {
         core::StringView dag_answer;
         char mcq_str[2] = {0, 0};
@@ -357,7 +335,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
                     core::StringView (reinterpret_cast<const char *> (payload), static_cast<core::usize> (payload_len));
         }
 
-        // Huffman delta compression: compare previous answer against current answer
+        // Compress delta against prior answer snapshot
         if (engine->wal.is_open ()) {
             sync_engine::MerkleNode prev_node{};
             core::StringView prev_ans{};
@@ -385,12 +363,11 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         engine->merkle_dag.append (sid, qid, hdr.monotonic_dt_ms, dag_answer, nullptr);
     }
 
-    // ---- 4. Reset scratch arena ---------------------------------------------
+    // Wipe scratch arena for clean working memory
     engine->scratch_arena.reset ();
 
-    // ---- 5. Ensure the student has an active ExamSession -------------------
+    // Ensure student has an active adaptive session (first packet bootstrap)
     if (st.session == nullptr && engine->question_bank.ready () && engine->question_bank.size () > 0u) {
-        // Allocate the ExamSession object in the persistent arena.
         void *sess_mem =
                 engine->pers_arena.allocate (sizeof (adaptive_rank::ExamSession), alignof (adaptive_rank::ExamSession));
         if (sess_mem) {
@@ -406,7 +383,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         }
     }
 
-    // ---- 6. Div 2: Time-sync anomaly detection ------------------------------
+    // Anti-cheat signal 1: time-synchronization spike check (|dt_a - dt_b| < 500ms)
     {
         core::Array<core::anticheat::StatAnomalyMatch> stat_hits (engine->scratch_arena, 16u);
         engine->anomaly.record_dt (sid, qid, hdr.monotonic_dt_ms, engine->scratch_arena, stat_hits);
@@ -418,7 +395,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         }
     }
 
-    // ---- 7. Div 2: Text-similarity fingerprinting (for TextDelta/FinalSubmit)
+    // Anti-cheat signal 2: text winnowing fingerprint match on essays / code
     if (action == core::ActionType::TextDelta || action == core::ActionType::FinalSubmit) {
         core::StringView text_sv (reinterpret_cast<const char *> (payload), static_cast<core::usize> (payload_len));
 
@@ -435,7 +412,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         }
     }
 
-    // ---- 8. Div 2: MCQ rare-error detection ---------------------------------
+    // Anti-cheat signal 3: rare shared wrong MCQ options
     bool mcq_was_correct = false;
     if (action == core::ActionType::McqSelect || action == core::ActionType::FinalSubmit) {
         const core::u8 chosen            = hdr.mcq_option;
@@ -456,7 +433,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
         }
     }
 
-    // ---- 9. Div 3: Grade and update IRT/Fenwick/AVL -------------------------
+    // Update IRT ability rating, Fenwick percentiles, and AVL leaderboard
     core::i32 new_score       = st.scaled_score;
     core::f64 new_theta       = 0.0;
     core::QuestionId next_qid = core::INVALID_QUESTION_ID;
@@ -471,14 +448,14 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
             st.scaled_score  = new_score;
             st.total_time_ms = st.session->total_time_ms ();
 
-            // Update Fenwick.
+            // Adjust student position in Fenwick tree
             if (st.in_avl) {
                 engine->fenwick.update (old_score, new_score);
             } else {
                 engine->fenwick.add (new_score);
             }
 
-            // Update AVL.
+            // Adjust student key in Order-Statistic AVL tree
             const core::LeaderboardKey new_key = st.session->leaderboard_key ();
             if (st.in_avl) {
                 engine->avl.update (st.lb_key, new_key);
@@ -489,15 +466,15 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
             st.lb_key = new_key;
         }
 
-        // Serve next question.
+        // Fetch next adaptive question if exam is still in progress
         if (!st.session->finished ()) { st.session->next_question (&next_qid); }
     }
 
-    // ---- 10. Collusion flags ------------------------------------------------
+    // Check collusion status via DSU
     const bool is_flagged      = engine->collusion.is_flagged (sid);
     const core::u32 cluster_rt = engine->collusion.cluster_root (sid);
 
-    // ---- 11. Build response -------------------------------------------------
+    // Build synchronous client response
     EduIngestResult res{};
     res.status_code      = static_cast<core::u8> (core::StatusCode::Ok);
     res.is_flagged_ring  = is_flagged ? 1u : 0u;
@@ -506,7 +483,7 @@ extern "C" EduIngestResult eduroute_ingest_packet (EduRouteEngine *engine, const
     res.updated_theta    = static_cast<float> (new_theta);
     res.cluster_root_id  = cluster_rt;
 
-    // Rank and percentile from Fenwick/AVL.
+    // Fast O(log N) rank and percentile queries
     if (st.in_avl) {
         core::u32 rank_out = 0u;
         engine->avl.rank_of (st.lb_key, &rank_out);
@@ -549,10 +526,10 @@ extern "C" size_t eduroute_get_top_k (EduRouteEngine *engine, EduLeaderboardRow 
         out_rows[i].total_time_ms = keys[i].total_time_ms;
         out_rows[i].is_flagged    = engine->collusion.is_flagged (sid) ? 1u : 0u;
 
-        // Percentile from Fenwick.
+        // Lookup percentile directly from Fenwick prefix sums
         out_rows[i].percentile = static_cast<float> (engine->fenwick.percentile (keys[i].scaled_score));
 
-        // IRT ability from session.
+        // Current theta ability rating
         if (valid_student (engine, sid) && engine->students[sid].session != nullptr) {
             out_rows[i].theta_ability = static_cast<float> (engine->students[sid].session->ability ());
         } else {
@@ -565,7 +542,7 @@ extern "C" size_t eduroute_get_top_k (EduRouteEngine *engine, EduLeaderboardRow 
 extern "C" size_t eduroute_get_collusion_edges (EduRouteEngine *engine, EduCollusionEdge *out_edges, size_t max_edges) {
     if (!engine || !out_edges || max_edges == 0u) return 0u;
 
-    // Reuse a scratch buffer of CollusionEdge.
+    // Allocate scratch edge buffer
     engine->scratch_arena.reset ();
     auto *buf = static_cast<core::anticheat::CollusionEdge *> (engine->scratch_arena.allocate (
             max_edges * sizeof (core::anticheat::CollusionEdge), alignof (core::anticheat::CollusionEdge)));
@@ -591,10 +568,7 @@ extern "C" size_t eduroute_get_arena_Memory_used (const EduRouteEngine *engine) 
     return engine->pers_arena.used () + engine->scratch_arena.used ();
 }
 
-// ============================================================================
-//  Sync Engine & Merkle DAG Inspection APIs (Division 1)
-// ============================================================================
-
+// Merkle DAG telemetry queries
 extern "C" size_t eduroute_get_dag_node_count (const EduRouteEngine *engine) {
     if (!engine) return 0u;
     return engine->merkle_dag.node_count ();
@@ -627,10 +601,7 @@ extern "C" size_t eduroute_get_dag_history_size (const EduRouteEngine *engine, u
                                             static_cast<core::QuestionId> (question_id));
 }
 
-// ============================================================================
-//  Sync Engine, WAL & Huffman Compression APIs (Division 1)
-// ============================================================================
-
+// WAL disk persistence & compression status
 extern "C" size_t eduroute_wal_pending_count (const EduRouteEngine *engine) {
     if (!engine || !engine->wal.is_open ()) return 0u;
     return engine->wal.pending_count ();
@@ -687,7 +658,7 @@ extern "C" int eduroute_wal_append_unacked (EduRouteEngine *engine, uint32_t stu
     engine->total_deltas_compressed += 1;
 
     if (out_sequence) *out_sequence = seq;
-    // Intentionally NOT acknowledged, leaving it pending on disk!
+    // Don't ACK here so recovery test can demonstrate replaying pending frames
     return 1;
 }
 
@@ -719,7 +690,7 @@ extern "C" int eduroute_wal_recover_and_apply_next (EduRouteEngine *engine, uint
         if (out_text_buf && buf_cap > 0) out_text_buf[0] = '\0';
     }
 
-    // Mark as acknowledged after recovery
+    // Now mark acknowledged after applying
     engine->wal.acknowledge (rec->sequence);
     return 1;
 }

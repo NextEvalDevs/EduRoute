@@ -1,9 +1,5 @@
 /*
- * Eduroute -- An Adaptive Exam & Integrity Engine
- *  The main user workflow is a student submitting an answer through the dashboard,
- *  which passes submissions to the engine and displays the returned next question,
- *  score, rank, and integrity status. Internally, the C ABI coordinates adaptive ranking,
- *  anti-cheat analysis, and synchronization facilities, supported by arena-backed core structures.
+ * Eduroute: Sem Project, Dept. of CSE
  *
  * Copyright (C) 2026 Team NextEval @ NITT
  * Authors:

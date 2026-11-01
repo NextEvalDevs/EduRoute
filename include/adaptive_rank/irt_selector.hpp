@@ -5,26 +5,12 @@
 
 namespace adaptive_rank {
 
-    /**
-     * ADAPTIVE QUESTION SELECTION  (IRT = Item Response Theory)
-     * =========================================================
-     * Every question has a DIFFICULTY b (-4 easy .. +4 hard) and a DISCRIMINATION a (how sharply it
-     * separates strong from weak students). Every student has an ABILITY theta on the same scale.
-     *
-     *      P(student answers correctly) = 1 / (1 + exp(-a * (theta - b)))
-     *
-     * Three things live here:
-     *   1. QuestionBank  - the pool of questions (validated, fixed capacity, arena memory).
-     *   2. ExamSession   - ONE student's adaptive exam: serves the question that tells us the most
-     *                      about them, re-estimates ability after every answer, says when to stop,
-     *                      and produces the score used by the leaderboard.
-     *   3. build_paper() - makes a FIXED question paper for everyone from a difficulty blueprint.
-     *
-     * Nothing here throws, uses the STL, or crashes on bad input: failures come back as
-     * core::StatusCode (InvalidState = bad argument/state, KeyNotFound = unknown question,
-     * DuplicateSubmission = repeated question/answer, OutOfMemory = arena or bank full).
-     * Everything is deterministic for a given seed (important for offline replay & audits).
-     */
+    // Item Response Theory (IRT) question selection and ability estimation.
+    // 2-parameter logistic model (2PL):
+    //   P(correct) = 1 / (1 + exp(-a * (theta - b)))
+    // where b is item difficulty and a is discrimination.
+    // Supports adaptive item serving, Bayesian/Newton-Raphson ability updates,
+    // and fixed paper generation from blueprint distributions.
 
     // ------------------------------------------------------------------------------------------
     // Small deterministic random generator (xorshift64*). No std::random, same output everywhere.
