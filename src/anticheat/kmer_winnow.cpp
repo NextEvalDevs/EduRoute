@@ -7,6 +7,7 @@ namespace core::anticheat {
         out_fingerprints.clear ();
         if (raw_text.size () < KMER_LEN) return;
 
+        // Normalize: lowercase alphanumeric only, drop all punctuation/spaces
         char *normb    = static_cast<char *> (scratch.allocate (raw_text.size (), 1));
         usize norm_len = 0;
 
@@ -21,6 +22,7 @@ namespace core::anticheat {
         if (norm_len < KMER_LEN) return;
         const usize num_kmer = norm_len - KMER_LEN + 1;
 
+        // Rolling Rabin-Karp hashes for all 5-grams
         Array<u64> kmer_hashes (scratch, num_kmer);
         u64 hpow = 1;
         for (usize i = 0; i < KMER_LEN - 1; i++) hpow = (hpow * RK_BASE) % RK_MOD;
@@ -41,6 +43,7 @@ namespace core::anticheat {
             return;
         }
 
+        // Winnowing algorithm: select rightmost minimum hash in each sliding window
         usize last_picked_idx = ~static_cast<usize> (0);
         for (usize w_start = 0; w_start + WINDOW <= num_kmer; ++w_start) {
             usize min_idx = w_start;
@@ -69,7 +72,7 @@ namespace core::anticheat {
 
         doc_fp_c_.insert (make_student_q_key (qid, sid), my_fp_cnt);
 
-
+        // Find peer matches using inverted index
         HashMap<StudentId, u32> hit_cnts (scratch, 64);
         Array<StudentId> matched_students (scratch, 32);
 
@@ -104,11 +107,12 @@ namespace core::anticheat {
             }
         }
 
+        // Calculate containment similarity: shared / min(docA, docB)
         for (const auto &x: matched_students) {
             const StudentId otsid = x;
             const u32 *shared_ptr = hit_cnts.find (otsid);
             const u32 shared      = shared_ptr ? *shared_ptr : 0u;
-            if (shared < 2) continue;
+            if (shared < 2) continue; // ignore single-hash false positives
 
             const u32 *otttpr = doc_fp_c_.find (make_student_q_key (qid, otsid));
             const u32 ottt    = otttpr ? *otttpr : shared;

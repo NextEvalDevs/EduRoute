@@ -31,9 +31,7 @@
 
 #include "eduroute_c_api.h"
 
-// -----------------------------------------------------------------------------
-// Minimalist Test Harness
-// -----------------------------------------------------------------------------
+// Test framework state
 static int g_total_assertions  = 0;
 static int g_failed_assertions = 0;
 static int g_suites_run        = 0;
@@ -53,9 +51,7 @@ static int g_suites_run        = 0;
         std::printf ("[RUNNING TEST SUITE] %s\n", name);                                                               \
     } while (0)
 
-// -----------------------------------------------------------------------------
-// Suite 1: Core Primitives
-// -----------------------------------------------------------------------------
+// Core arena & data structure unit tests
 
 static void test_core_arena () {
     TEST_SUITE_START ("Core Arena Allocator");
@@ -66,18 +62,18 @@ static void test_core_arena () {
     TEST_ASSERT (arena.capacity () == ARENA_SIZE, "Arena capacity matches request");
     TEST_ASSERT (arena.used () == 0, "Initial arena usage is 0");
 
-    // Basic allocation and alignment
+    // Bump pointer allocation & 8-byte alignment
     void *p1 = arena.allocate (100, 8);
     TEST_ASSERT (p1 != nullptr, "p1 allocated");
     TEST_ASSERT ((reinterpret_cast<std::uintptr_t> (p1) % 8) == 0, "p1 is 8-byte aligned");
     TEST_ASSERT (arena.used () >= 100, "Used bytes increased");
 
-    // 64-byte alignment
+    // Stricter alignment test (64-byte cache line)
     void *p2 = arena.allocate (50, 64);
     TEST_ASSERT (p2 != nullptr, "p2 allocated");
     TEST_ASSERT ((reinterpret_cast<std::uintptr_t> (p2) % 64) == 0, "p2 is 64-byte aligned");
 
-    // Create trivial struct
+    // In-place placement new on POD struct
     struct Point {
             int x;
             int y;
@@ -87,7 +83,7 @@ static void test_core_arena () {
     TEST_ASSERT (pt != nullptr, "Point constructed in-place");
     TEST_ASSERT (pt->x == 10 && pt->y == 20 && pt->z == 30.5f, "Point values preserved");
 
-    // Marker and rollback
+    // Rewind / rollback check using saved marker
     auto marker              = arena.get_marker ();
     core::usize used_at_mark = arena.used ();
 
@@ -98,7 +94,7 @@ static void test_core_arena () {
     arena.reset_to_marker (marker);
     TEST_ASSERT (arena.used () == used_at_mark, "arena usage rolled back to marker");
 
-    // ScopedArena RAII test
+    // ScopedArena RAII helper: unwinds allocations on block scope exit
     {
         core::ScopedArena scoped (arena);
         void *scoped_mem = scoped.get ().allocate (200, 8);
@@ -107,11 +103,11 @@ static void test_core_arena () {
     }
     TEST_ASSERT (arena.used () == used_at_mark, "ScopedArena automatically rolled back memory on exit");
 
-    // Exhaustion test
+    // Make sure allocator doesn't panic on OOM, just returns nullptr
     void *huge = arena.allocate (ARENA_SIZE * 2, 8);
     TEST_ASSERT (huge == nullptr, "OOM allocation returns nullptr");
 
-    // Full reset
+    // Total arena wipe
     arena.reset ();
     TEST_ASSERT (arena.used () == 0, "arena.reset() restores usage to 0");
 }
@@ -136,12 +132,12 @@ static void test_core_dyn_array () {
     TEST_ASSERT (arr.size () == 19, "pop_back reduced size to 19");
     TEST_ASSERT (arr[arr.size () - 1] == 180, "New last element is 180");
 
-    // Range-based for loop iteration
+    // Verify range-for iterator support
     int sum = 0;
     for (int v: arr) { sum += v; }
     TEST_ASSERT (sum == (19 * 180) / 2, "Iterator sum over elements is correct");
 
-    // Emplace back struct
+    // Emplace back test with forwarding constructor args
     struct Item {
             int id;
             float weight;
@@ -166,7 +162,7 @@ static void test_core_hash_map () {
     TEST_ASSERT (map.empty (), "New map is empty");
     TEST_ASSERT (map.size () == 0, "Size is 0");
 
-    // Insert and find
+    // Insert keys & test find
     map.insert (100, 500);
     map.insert (200, 600);
     map.insert (300, 700);
@@ -182,16 +178,16 @@ static void test_core_hash_map () {
     TEST_ASSERT (v3 != nullptr && *v3 == 700, "Key 300 found with value 700");
     TEST_ASSERT (v4 == nullptr, "Key 999 not found");
 
-    // Update existing key
+    // Overwriting existing key should update value in-place
     map.insert (100, 555);
     TEST_ASSERT (map.size () == 3, "Size remains 3 after update");
     TEST_ASSERT (*map.find (100) == 555, "Value for key 100 successfully updated to 555");
 
-    // Rehashing test: insert 150 elements
+    // Stress test rehashing: insert 150 items to trigger multiple growth steps
     for (core::u32 i = 1000; i < 1150; ++i) { map.insert (i, i * 2); }
     TEST_ASSERT (map.size () == 153, "Map rehashed and grew to 153 elements");
 
-    // Verify all keys remain intact after rehash
+    // Check that Robin Hood displacement preserved every key after table expansion
     bool all_found = true;
     for (core::u32 i = 1000; i < 1150; ++i) {
         core::u32 *val = map.find (i);
@@ -214,16 +210,16 @@ static void test_core_dsu () {
 
     for (core::u32 i = 0; i < 10; ++i) { TEST_ASSERT (dsu.component_size (i) == 1, "Initial component size is 1"); }
 
-    // Join 1 and 2
+    // Join elements 1 and 2
     TEST_ASSERT (dsu.join (1, 2) == true, "Join 1 and 2 succeeded");
     TEST_ASSERT (dsu.connected (1, 2) == true, "1 and 2 are connected");
     TEST_ASSERT (dsu.num_components () == 9, "Components reduced to 9");
     TEST_ASSERT (dsu.component_size (1) == 2, "Component size is now 2");
 
-    // Redundant join
+    // Duplicate join should be a no-op
     TEST_ASSERT (dsu.join (1, 2) == false, "Redundant join returns false");
 
-    // Join 3 and 4, then join 2 and 3 -> cluster {1, 2, 3, 4}
+    // Connect {1,2} with {3,4} -> merged component of 4 items
     dsu.join (3, 4);
     dsu.join (2, 3);
     TEST_ASSERT (dsu.connected (1, 4) == true, "1 and 4 are transitively connected");
@@ -250,7 +246,7 @@ static void test_core_string_view () {
     mod.remove_suffix (6);
     TEST_ASSERT (mod == core::StringView ("EduRoute"), "remove_suffix works");
 
-    // Hash consistency
+    // FNV-1a hash consistency check
     core::Hash64 h1 = core::StringView ("TestString").hash ();
     core::Hash64 h2 = core::StringView ("TestString").hash ();
     core::Hash64 h3 = core::StringView ("DifferentString").hash ();
@@ -264,7 +260,7 @@ static void test_core_bit_stream () {
     core::Arena arena (1024);
     core::BitWriter writer (arena, 64);
 
-    // Write sequence of bits
+    // Pack alternating single bits and small numbers
     writer.write_bit (true);      // 1
     writer.write_bit (false);     // 0
     writer.write_bit (true);      // 1
@@ -282,9 +278,7 @@ static void test_core_bit_stream () {
     TEST_ASSERT (reader.read_bits (6) == 0x3Fu, "6-bit value 0x3F matches");
 }
 
-// -----------------------------------------------------------------------------
-// Suite 2: Division 2 Anti-Cheat
-// -----------------------------------------------------------------------------
+// Anti-cheat engine unit tests
 
 static void test_anticheat_kmer_winnow () {
     TEST_SUITE_START ("Div 2 KmerWinnow Fingerprinting");
@@ -296,11 +290,11 @@ static void test_anticheat_kmer_winnow () {
     core::Array<core::Hash64> fps1 (scratch_arena, 64);
     core::Array<core::Hash64> fps2 (scratch_arena, 64);
 
-    // Test text < KMER_LEN (5)
+    // Edge case: string shorter than k=5 k-mer length should yield zero fingerprints
     core::anticheat::KmerWinnow::extract_fingerprints (core::StringView ("Ab1"), scratch_arena, fps1);
     TEST_ASSERT (fps1.empty (), "Text shorter than KMER_LEN produces 0 fingerprints");
 
-    // Test identical text produces identical fingerprints
+    // Case and punctuation normalization check
     core::StringView textA ("Balanced binary search trees maintain O(log n) height.");
     core::StringView textB ("balanced BINARY search trees maintain o(log n) height!!");
 
@@ -321,14 +315,14 @@ static void test_anticheat_kmer_winnow () {
     }
     TEST_ASSERT (identical, "Fingerprints match exactly after normalization");
 
-    // Test matching via index_and_match
+    // Inverted index match check
     core::Array<core::anticheat::TextSimMatch> matches (scratch_arena, 16);
 
-    // Index Student 1
+    // Index first submission (Student 1)
     winnow.index_and_match (1, 10, fps1, scratch_arena, matches);
     TEST_ASSERT (matches.empty (), "First student has no prior matches");
 
-    // Student 2 submits the identical text for the same question
+    // Student 2 submits the identical text for question 10
     matches.clear ();
     winnow.index_and_match (2, 10, fps2, scratch_arena, matches);
     TEST_ASSERT (!matches.empty (), "Student 2 matched with Student 1");
@@ -355,46 +349,45 @@ static void test_anticheat_anomaly_stats () {
     TEST_ASSERT (st == core::StatusCode::Ok, "AnomalyStats init succeeded");
     TEST_ASSERT (stats.ready (), "AnomalyStats is ready");
 
-    // ---- 1. Time-sync spike detection (|Δt_A - Δt_B| <= 500 ms) ----
+    // Test 1: simultaneous submission timing spike (|dt_a - dt_b| <= 500 ms)
     core::Array<core::anticheat::StatAnomalyMatch> matches (scratch, 16);
 
-    // Student 1 submits dt = 10000 ms on Q1
+    // Student 1 answers Q1 at 10.0s
     stats.record_dt (1, 1, 10000, scratch, matches);
     TEST_ASSERT (matches.empty (), "First student has no time-sync peers");
 
-    // Student 2 submits dt = 10150 ms on Q1 (diff = 150 ms <= 500 ms)
+    // Student 2 answers Q1 at 10.15s (150ms delta -> within 500ms suspicious window)
     matches.clear ();
     stats.record_dt (2, 1, 10150, scratch, matches);
     TEST_ASSERT (!matches.empty (), "Time-sync spike detected between Student 2 and Student 1");
     TEST_ASSERT (matches[0].other_student == 1, "Peer is Student 1");
     TEST_ASSERT (matches[0].time_score >= 1.0f, "Time score incremented");
 
-    // Student 3 submits dt = 15000 ms on Q1 (diff = 5000 ms > 500 ms)
+    // Student 3 answers 5s later -> well outside window, no hit
     matches.clear ();
     stats.record_dt (3, 1, 15000, scratch, matches);
     TEST_ASSERT (matches.empty (), "Student 3 with far dt triggers no time-sync spike");
 
-    // ---- 2. Shared rare error detection ----
-    // Question 2: Correct answer is option 0. Option 3 is chosen by only rare students.
-    // Populate with 35 normal students choosing option 0 (total submissions > 35 ensures 2/37 < 10%)
+    // Test 2: shared rare mistake detection on MCQ
+    // Seed with 35 students picking correct option A
     for (core::StudentId s = 10; s < 45; ++s) {
         matches.clear ();
-        stats.record_mcq (s, 2, 0, 0, scratch, matches); // correct
+        stats.record_mcq (s, 2, 0, 0, scratch, matches);
     }
 
-    // Student 4 chooses wrong option 3 (rare: 1/16 < 10%)
+    // Student 4 picks distractor D (< 10% frequency -> rare error)
     matches.clear ();
     stats.record_mcq (4, 2, 3, 0, scratch, matches);
     TEST_ASSERT (matches.empty (), "First student choosing rare error has no peer match yet");
 
-    // Student 5 also chooses wrong option 3 -> should trigger rare error hit with Student 4!
+    // Student 5 picks the exact same rare mistake D -> should trigger collusion hit
     matches.clear ();
     stats.record_mcq (5, 2, 3, 0, scratch, matches);
     TEST_ASSERT (!matches.empty (), "Shared rare error detected between Student 5 and Student 4");
     TEST_ASSERT (matches[0].other_student == 4, "Matched other student is Student 4");
     TEST_ASSERT (matches[0].err_score >= 2.0f, "Err score incremented");
 
-    // Pair score symmetry
+    // Verify lookup is symmetric regardless of argument order
     core::f32 t_score = 0.0f, e_score = 0.0f;
     TEST_ASSERT (stats.get_pair_scores (4, 5, &t_score, &e_score) == core::StatusCode::Ok, "Query (4, 5) succeeded");
     core::f32 t_score2 = 0.0f, e_score2 = 0.0f;
@@ -411,16 +404,16 @@ static void test_anticheat_collusion_graph () {
 
     bool flagged = false;
 
-    // Initially unflagged
+    // Everyone starts unflagged
     TEST_ASSERT (!graph.is_flagged (1), "Student 1 initially not flagged");
     TEST_ASSERT (!graph.is_flagged (2), "Student 2 initially not flagged");
 
-    // Add mild time-sync suspicion (weight = 1.0 * 1.0 = 1.0 < 3.0 threshold)
+    // Mild time-sync signal alone (W = 1.0 < 3.0 threshold)
     graph.update_stat (1, 2, 1.0f, 0.0f, flagged);
     TEST_ASSERT (!flagged, "W=1.0 is below COLLUSION_THRESHOLD (3.0)");
     TEST_ASSERT (!graph.is_flagged (1), "Student 1 still not in cheating cluster");
 
-    // Add high text similarity (W = 1.0 + 4.0 * 0.9 = 4.6 >= 3.0 threshold!)
+    // Heavy text match pushes W across 3.0 threshold -> flags students
     graph.update_text (1, 2, 0.9f, flagged);
     TEST_ASSERT (flagged, "Combined weight crossed 3.0 -> flagged confirmed colluders");
     TEST_ASSERT (graph.is_flagged (1), "Student 1 is now flagged in DSU");
@@ -428,20 +421,20 @@ static void test_anticheat_collusion_graph () {
     TEST_ASSERT (graph.cluster_root (1) == graph.cluster_root (2), "1 and 2 share the same DSU cluster root");
     TEST_ASSERT (graph.cluster_size (1) == 2, "Cluster size is 2");
 
-    // Transitive ring formation: Student 2 colludes with Student 3
+    // Transitive clustering: student 2 also cheated with student 3
     bool flagged2 = false;
     graph.update_text (2, 3, 1.0f, flagged2); // W = 4.0 >= 3.0
     TEST_ASSERT (flagged2, "2 and 3 confirmed colluders");
     TEST_ASSERT (graph.cluster_root (1) == graph.cluster_root (3), "1, 2, and 3 are in the same DSU cluster");
     TEST_ASSERT (graph.cluster_size (1) == 3, "Cluster size expanded to 3 students");
 
-    // Verify edge retrieval
+    // Inspect stored edge stats
     core::anticheat::CollusionEdge edge{};
     TEST_ASSERT (graph.get_edge (1, 2, &edge), "Edge (1, 2) retrieved");
     TEST_ASSERT (edge.combined_weight >= 4.0f, "Combined weight accurately recorded");
     TEST_ASSERT (edge.peak_text_sim == 0.9f, "Peak text similarity matches");
 
-    // Verify confirmed edges export
+    // Export confirmed edges for teacher dashboard
     core::anticheat::CollusionEdge confirmed[10];
     core::usize edge_count = graph.get_confirmed_edges (confirmed, 10);
     TEST_ASSERT (edge_count == 2, "2 confirmed collusion edges in graph");
@@ -460,7 +453,7 @@ static void test_rank_fenwick_score () {
 
     TEST_ASSERT (fenwick.total () == 0, "Initial total is 0");
 
-    // Add scores for students
+    // Populate initial scores (ranging 0 - 10000)
     TEST_ASSERT (fenwick.add (2000) == core::StatusCode::Ok, "add 2000 ok");
     TEST_ASSERT (fenwick.add (5000) == core::StatusCode::Ok, "add 5000 ok");
     TEST_ASSERT (fenwick.add (5000) == core::StatusCode::Ok, "add 5000 tie ok");
@@ -473,18 +466,18 @@ static void test_rank_fenwick_score () {
     TEST_ASSERT (fenwick.count_greater (5000) == 2, "Count strictly greater than 5000 is 2 (8000, 9000)");
     TEST_ASSERT (fenwick.count_in_range (4000, 8500) == 3, "Range [4000, 8500] contains 3 scores (5000, 5000, 8000)");
 
-    // Ranks (1-based, higher score = better rank)
+    // 1-based ranks: highest score holds rank 1
     TEST_ASSERT (fenwick.rank (9000) == 1, "Score 9000 has rank 1 (best)");
     TEST_ASSERT (fenwick.rank (8000) == 2, "Score 8000 has rank 2");
     TEST_ASSERT (fenwick.rank (5000) == 3, "Score 5000 has rank 3");
     TEST_ASSERT (fenwick.rank (2000) == 5, "Score 2000 has rank 5");
 
-    // Percentiles: (below + 0.5 * tied) / total * 100
-    // For 5000: (1 + 0.5 * 2) / 5 * 100 = 40.0%
+    // Mid-percentile formula: (strictly_below + 0.5 * tied) / total * 100
+    // At score 5000: (1 + 0.5 * 2) / 5 * 100 = 40.0%
     core::f64 pct = fenwick.percentile (5000);
     TEST_ASSERT (std::fabs (pct - 40.0) < 1e-4, "Percentile for score 5000 is exactly 40%");
 
-    // Binary lifting search: score_at_rank
+    // Binary lifting prefix walk to pinpoint rank -> score
     core::i32 score_out = 0;
     TEST_ASSERT (fenwick.score_at_rank (1, &score_out) == core::StatusCode::Ok, "score_at_rank(1) ok");
     TEST_ASSERT (score_out == 9000, "Rank 1 is score 9000");
@@ -492,13 +485,13 @@ static void test_rank_fenwick_score () {
     TEST_ASSERT (fenwick.score_at_rank (2, &score_out) == core::StatusCode::Ok, "score_at_rank(2) ok");
     TEST_ASSERT (score_out == 8000, "Rank 2 is score 8000");
 
-    // Update score: 2000 -> 9500 (student improves)
+    // Student retakes test or improves score: remove 2000 and insert 9500
     TEST_ASSERT (fenwick.update (2000, 9500) == core::StatusCode::Ok, "update(2000, 9500) ok");
     TEST_ASSERT (fenwick.total () == 5, "Total count remains 5 after update");
     TEST_ASSERT (fenwick.rank (9500) == 1, "Updated score 9500 is now rank 1");
     TEST_ASSERT (fenwick.rank (9000) == 2, "Former top score 9000 is now rank 2");
 
-    // Clamping: negative scores and scores > 10000 do not crash
+    // Sanity check clamping so weird inputs don't segfault bucket lookups
     TEST_ASSERT (fenwick.add (-100) == core::StatusCode::Ok, "Negative score clamped to bucket 0");
     TEST_ASSERT (fenwick.add (999999) == core::StatusCode::Ok, "Excessive score clamped to max bucket");
 }
@@ -513,12 +506,11 @@ static void test_rank_order_stat_avl () {
     TEST_ASSERT (avl.size () == 0, "Tree is empty");
     TEST_ASSERT (avl.validate (), "Empty tree validates invariants");
 
-    // Insert keys:
-    // Key ordering: higher score > lower score; lower time > higher time; lower sid > higher sid
-    core::LeaderboardKey k1{8000, 30000, 1}; // Score 8000, Time 30s, Student 1
-    core::LeaderboardKey k2{8000, 20000, 2}; // Score 8000, Time 20s (beats k1 on time!), Student 2
-    core::LeaderboardKey k3{9000, 40000, 3}; // Score 9000 (highest score!), Student 3
-    core::LeaderboardKey k4{5000, 10000, 4}; // Score 5000 (lowest score), Student 4
+    // Tie-break rules: highest score wins -> fastest completion time -> lowest student ID
+    core::LeaderboardKey k1{8000, 30000, 1}; // 8000 pts in 30s, sid 1
+    core::LeaderboardKey k2{8000, 20000, 2}; // 8000 pts in 20s (faster than k1), sid 2
+    core::LeaderboardKey k3{9000, 40000, 3}; // 9000 pts in 40s (outright leader), sid 3
+    core::LeaderboardKey k4{5000, 10000, 4}; // 5000 pts in 10s (trailing score), sid 4
 
     TEST_ASSERT (avl.insert (k1) == core::StatusCode::Ok, "insert k1 ok");
     TEST_ASSERT (avl.insert (k2) == core::StatusCode::Ok, "insert k2 ok");
@@ -528,11 +520,11 @@ static void test_rank_order_stat_avl () {
     TEST_ASSERT (avl.size () == 4, "4 keys inserted");
     TEST_ASSERT (avl.validate (), "AVL invariants hold after 4 insertions");
 
-    // Ranks:
-    // 1st: k3 (Score 9000)
-    // 2nd: k2 (Score 8000, Time 20s)
-    // 3rd: k1 (Score 8000, Time 30s)
-    // 4th: k4 (Score 5000)
+    // Expected standings:
+    // 1st: k3 (9000 pts)
+    // 2nd: k2 (8000 pts, faster time)
+    // 3rd: k1 (8000 pts, slower time)
+    // 4th: k4 (5000 pts)
     core::u32 rank = 0;
     avl.rank_of (k3, &rank);
     TEST_ASSERT (rank == 1, "k3 (9000) is Rank 1");
@@ -543,27 +535,27 @@ static void test_rank_order_stat_avl () {
     avl.rank_of (k4, &rank);
     TEST_ASSERT (rank == 4, "k4 (5000) is Rank 4");
 
-    // Select (k-th element)
+    // Subtree-size order-statistic selection (1-indexed)
     core::LeaderboardKey selected{};
     TEST_ASSERT (avl.select (1, &selected) == core::StatusCode::Ok, "select(1) ok");
     TEST_ASSERT (selected == k3, "select(1) retrieved k3");
     TEST_ASSERT (avl.select (2, &selected) == core::StatusCode::Ok, "select(2) ok");
     TEST_ASSERT (selected == k2, "select(2) retrieved k2");
 
-    // Top K array
+    // In-order traversal export for top-K display
     core::LeaderboardKey top[4];
     core::u32 written = avl.top_k (3, top);
     TEST_ASSERT (written == 3, "top_k wrote 3 items");
     TEST_ASSERT (top[0] == k3 && top[1] == k2 && top[2] == k1, "top_k sorted order verified");
 
-    // Update k4 to beat k3 (k4 gets score 9500)
+    // Student 4 resubmits and surges into first place (9500 pts)
     core::LeaderboardKey k4_new{9500, 15000, 4};
     TEST_ASSERT (avl.update (k4, k4_new) == core::StatusCode::Ok, "update key succeeded");
     TEST_ASSERT (avl.validate (), "AVL invariants hold after update");
     avl.rank_of (k4_new, &rank);
     TEST_ASSERT (rank == 1, "k4_new is now Rank 1");
 
-    // Erase
+    // Deletion check
     TEST_ASSERT (avl.erase (k1) == core::StatusCode::Ok, "erase k1 succeeded");
     TEST_ASSERT (avl.size () == 3, "Size reduced to 3");
     TEST_ASSERT (!avl.contains (k1), "k1 no longer in tree");
@@ -577,7 +569,7 @@ static void test_rank_irt_selector () {
     adaptive_rank::QuestionBank bank;
     TEST_ASSERT (bank.init (arena, 20) == core::StatusCode::Ok, "QuestionBank init succeeded");
 
-    // Add calibrated questions across difficulty tiers
+    // Populate question pool spanning difficulty spectrum [-2.0, +2.0]
     TEST_ASSERT (bank.add_calibrated (1, 0, -2.0, 1, 1.0) == core::StatusCode::Ok, "add Q1 ok");
     TEST_ASSERT (bank.add_calibrated (2, 0, -1.0, 2, 1.0) == core::StatusCode::Ok, "add Q2 ok");
     TEST_ASSERT (bank.add_calibrated (3, 0, 0.0, 0, 1.0) == core::StatusCode::Ok, "add Q3 ok");
@@ -588,7 +580,7 @@ static void test_rank_irt_selector () {
     TEST_ASSERT (bank.find (3) != nullptr, "Question 3 found");
     TEST_ASSERT (bank.find (99) == nullptr, "Question 99 not found");
 
-    // Create an ExamSession
+    // Configure test stopping criteria
     adaptive_rank::SelectorConfig cfg{};
     cfg.max_questions = 4;
     cfg.min_questions = 2;
@@ -600,12 +592,12 @@ static void test_rank_irt_selector () {
     TEST_ASSERT (session.init (arena, bank, 101, cfg) == core::StatusCode::Ok, "ExamSession init succeeded");
     TEST_ASSERT (!session.finished (), "ExamSession is not finished initially");
 
-    // Get first question
+    // Pick entry-level item based on prior theta
     core::QuestionId qid = core::INVALID_QUESTION_ID;
     TEST_ASSERT (session.next_question (&qid) == core::StatusCode::Ok, "next_question returned question");
     TEST_ASSERT (qid != core::INVALID_QUESTION_ID, "qid is valid");
 
-    // Student answers correctly
+    // Correct answer -> ability estimate should increase
     bool correct         = false;
     core::u8 correct_opt = bank.find (qid)->correct_option;
     TEST_ASSERT (session.submit_option (qid, correct_opt, 5000, &correct) == core::StatusCode::Ok, "submit_option ok");
@@ -613,12 +605,12 @@ static void test_rank_irt_selector () {
     TEST_ASSERT (session.answered () == 1, "1 question answered");
     TEST_ASSERT (session.ability () > 0.0, "Ability theta increased after correct answer");
 
-    // Get next adaptive question
+    // Fisher information should steer towards a harder question now
     core::QuestionId qid2 = core::INVALID_QUESTION_ID;
     TEST_ASSERT (session.next_question (&qid2) == core::StatusCode::Ok, "next_question 2 ok");
     TEST_ASSERT (qid2 != qid, "Next question is distinct from answered question");
 
-    // Student answers wrongly
+    // Miss the harder question -> score stays within normalized scale
     core::u8 wrong_opt = (bank.find (qid2)->correct_option + 1) % 4;
     TEST_ASSERT (session.submit_option (qid2, wrong_opt, 6000, &correct) == core::StatusCode::Ok, "submit_option 2 ok");
     TEST_ASSERT (correct == false, "Answer was graded wrong");
@@ -633,20 +625,20 @@ static void test_rank_irt_selector () {
 static void test_c_api_integration () {
     TEST_SUITE_START ("C ABI Lifecycle, Wire Packets & Ingest Pipeline");
 
-    // 1. Create Engine
+    // Initialize engine without persistence file backing first
     EduRouteEngine *engine = eduroute_create (100, 20, nullptr);
     TEST_ASSERT (engine != nullptr, "eduroute_create succeeded");
 
     core::usize mem_start = eduroute_get_arena_Memory_used (engine);
     TEST_ASSERT (mem_start > 0, "Initial arena memory is tracked");
 
-    // 2. Register Questions
+    // Pre-load exam questions with distinct Elo/IRT calibrations
     eduroute_register_question (engine, 1, 0, 900.0f, 15000, 1);
     eduroute_register_question (engine, 2, 0, 1100.0f, 15000, 2);
     eduroute_register_question (engine, 3, 0, 1300.0f, 20000, 0);
     eduroute_register_question (engine, 4, 0, 1500.0f, 25000, 3);
 
-    // 3. Build valid wire packet for Student 1
+    // Construct a synthetic 32-byte wire header for student 1's first answer
     core::u8 wire_buf[512];
     core::usize packet_sz = eduroute_build_wire_packet (engine,
                                                         1,    // student_id
@@ -657,7 +649,7 @@ static void test_c_api_integration () {
                                                         nullptr, 0, wire_buf, sizeof (wire_buf));
     TEST_ASSERT (packet_sz == sizeof (EduWireHeader), "Wire packet size matches header size (32 bytes)");
 
-    // 4. Ingest packet
+    // Ingest the legitimate submission through full pipeline
     EduIngestResult res = eduroute_ingest_packet (engine, wire_buf, packet_sz, 1000);
     TEST_ASSERT (res.status_code == 0, "Ingest status_code is Ok (0)");
     TEST_ASSERT (res.current_score > 0, "Score is positive");
@@ -665,17 +657,16 @@ static void test_c_api_integration () {
     TEST_ASSERT (res.next_question_id != 0xFFFF, "Adaptive next question served");
     TEST_ASSERT (res.is_flagged_ring == 0, "Student 1 is not flagged");
 
-    // 5. Corrupted packet test (tampered MAC tag)
+    // Tamper with the MAC tag to confirm hash chain integrity rejection
     EduWireHeader corrupted_hdr;
     std::memcpy (&corrupted_hdr, wire_buf, sizeof (EduWireHeader));
-    corrupted_hdr.mac_tag16 ^= 0xFFFFu; // flip bits
+    corrupted_hdr.mac_tag16 ^= 0xFFFFu; // bit flip tag
     EduIngestResult corrupt_res = eduroute_ingest_packet (engine, reinterpret_cast<const core::u8 *> (&corrupted_hdr),
                                                           sizeof (EduWireHeader), 1001);
     TEST_ASSERT (corrupt_res.status_code == static_cast<core::u8> (core::StatusCode::HashChainMismatch),
                  "Corrupted MAC rejected with HashChainMismatch");
 
-    // 6. Test collusion detection via wire packets
-    // Student 10 and 11 submit identical descriptive answers with close timing
+    // Simultaneous descriptive submissions with near-zero delta time to trigger collusion
     const char *cheating_text = "Dijkstra algorithm calculates shortest path with priority queue";
     core::usize text_len      = std::strlen (cheating_text);
 
@@ -691,19 +682,19 @@ static void test_c_api_integration () {
 
     TEST_ASSERT (res11.is_flagged_ring == 1, "Student 11 flagged in DSU cheating ring");
 
-    // 7. Verify Leaderboard export
+    // Check leaderboard C ABI export
     EduLeaderboardRow rows[10];
     core::usize row_count = eduroute_get_top_k (engine, rows, 10);
     TEST_ASSERT (row_count >= 1, "Top K leaderboard retrieved rows");
     TEST_ASSERT (rows[0].rank == 1, "First row is Rank 1");
 
-    // 8. Verify Collusion Edges export
+    // Verify collusion edge exported to frontend/bridge
     EduCollusionEdge edges[10];
     core::usize edge_count = eduroute_get_collusion_edges (engine, edges, 10);
     TEST_ASSERT (edge_count >= 1, "Collusion edge retrieved between Students 10 and 11");
     TEST_ASSERT (edges[0].combined_weight >= 3.0f, "Edge weight >= 3.0 threshold");
 
-    // 9. Destroy Engine
+    // Clean up
     eduroute_destroy (engine);
 }
 
@@ -718,7 +709,7 @@ static void test_sync_merkle_dag () {
 
     core::Arena arena (1024 * 1024);
 
-    // 1. In-memory append test
+    // Test in-memory chain building without file backing
     {
         sync_engine::MerkleDAG dag (arena);
         TEST_ASSERT (!dag.is_open (), "MerkleDAG is not open before file bind");
@@ -750,7 +741,7 @@ static void test_sync_merkle_dag () {
         TEST_ASSERT (dag.history_size (10, 101) == 2, "History size is 2");
     }
 
-    // 2. File-backed durability and recovery test
+    // Disk-backed durability and crash replay
     {
         core::Arena arena_disk (1024 * 1024);
         sync_engine::MerkleDAG dag (arena_disk);
@@ -771,7 +762,7 @@ static void test_sync_merkle_dag () {
         dag.close ();
         TEST_ASSERT (!dag.is_open (), "dag.close succeeds");
 
-        // Reopen from disk with fresh arena
+        // Reopen file into a completely fresh arena to simulate a fresh process start
         core::Arena arena_reopen (1024 * 1024);
         sync_engine::MerkleDAG recovered (arena_reopen);
         TEST_ASSERT (recovered.open (dag_tmp_file), "Reopening existing DAG file succeeds");
@@ -787,12 +778,12 @@ static void test_sync_merkle_dag () {
         recovered.close ();
     }
 
-    // 3. Corruption detection
+    // Tamper with binary header bytes and confirm corrupted files are rejected
     {
         FILE *fp = std::fopen (dag_tmp_file, "r+b");
         TEST_ASSERT (fp != nullptr, "Open DAG file for tampering");
         if (fp) {
-            std::fseek (fp, 15, SEEK_SET); // Corrupt bytes in the header
+            std::fseek (fp, 15, SEEK_SET); // Corrupt magic or version byte in header
             std::fputc (0xFF, fp);
             std::fclose (fp);
         }
@@ -814,7 +805,7 @@ static void test_sync_huffman_delta () {
 
     core::Arena arena (1024 * 1024);
 
-    // 1. Text delta generation
+    // Compute text diff between drafts
     sync_engine::TextDeltaArray deltas (arena);
     const char *old_txt = "The quick brown fox jumps";
     const char *new_txt = "The quick brown fox jumps over the lazy dog";
@@ -823,11 +814,11 @@ static void test_sync_huffman_delta () {
     TEST_ASSERT (deltas.size () == 1, "Delta generated when text changes");
     TEST_ASSERT (deltas[0].answer_id == 1, "Delta has correct answer_id");
 
-    // Identical text -> no delta generated
+    // Redundant save: identical text should produce zero deltas
     sync_engine::generate_text_delta (1, core::StringView (new_txt), core::StringView (new_txt), deltas);
     TEST_ASSERT (deltas.size () == 1, "No duplicate delta generated when text is unchanged");
 
-    // 2. Serialization and Huffman compression
+    // Build frequency table and pack bits into compressed payload
     sync_engine::CompressedTextDelta compressed = sync_engine::compress_text_delta (arena, deltas);
     TEST_ASSERT (compressed.valid, "Huffman compression produced valid delta");
     TEST_ASSERT (compressed.delta_count == 1, "Compressed delta_count is 1");
@@ -835,7 +826,7 @@ static void test_sync_huffman_delta () {
     TEST_ASSERT (compressed.frequencies.size () == 256, "Huffman frequency table has 256 entries");
     TEST_ASSERT (compressed.bytes.size () > 0, "Compressed output bytes > 0");
 
-    // 3. Decompression
+    // Decompress and reconstruct diff records
     core::Array<core::u8> text_storage (arena);
     sync_engine::TextDeltaArray decompressed = sync_engine::decompress_text_delta (arena, compressed, text_storage);
     TEST_ASSERT (decompressed.size () == 1, "Decompressed delta array size matches 1");
@@ -844,7 +835,7 @@ static void test_sync_huffman_delta () {
     TEST_ASSERT (std::memcmp (decompressed[0].new_value.data (), new_txt, decompressed[0].new_value.size ()) == 0,
                  "Decompressed text exactly matches original string");
 
-    // 4. Apply delta
+    // Apply recovered delta onto original baseline string
     core::Array<core::u8> applied_out (arena);
     bool applied = sync_engine::apply_text_delta (core::StringView (old_txt), decompressed[0], applied_out);
     TEST_ASSERT (applied, "apply_text_delta succeeds when old_value matches");
@@ -869,7 +860,7 @@ static void test_sync_wal_ring () {
         TEST_ASSERT (wal.is_open (), "wal.is_open is true");
         TEST_ASSERT (wal.pending_count () == 0, "Initial pending count is 0");
 
-        // Create compressed delta
+        // Write first unacknowledged batch
         sync_engine::TextDeltaArray deltas1 (arena);
         sync_engine::generate_text_delta (1, core::StringView ("init"), core::StringView ("first edit"), deltas1);
         sync_engine::CompressedTextDelta comp1 = sync_engine::compress_text_delta (arena, deltas1);
@@ -879,7 +870,7 @@ static void test_sync_wal_ring () {
         TEST_ASSERT (seq1 == 1, "Sequence 1 assigned");
         TEST_ASSERT (wal.pending_count () == 1, "Pending count is 1");
 
-        // Second batch
+        // Write second edit before the first gets ACKed
         sync_engine::TextDeltaArray deltas2 (arena);
         sync_engine::generate_text_delta (1, core::StringView ("first edit"), core::StringView ("second edit"),
                                           deltas2);
@@ -890,25 +881,25 @@ static void test_sync_wal_ring () {
         TEST_ASSERT (seq2 == 2, "Sequence 2 assigned");
         TEST_ASSERT (wal.pending_count () == 2, "Pending count is 2");
 
-        // Peek next
+        // Peek head of the pending queue (FIFO order)
         const sync_engine::WalRecord *rec = nullptr;
         TEST_ASSERT (wal.peek_next (rec), "wal.peek_next returns oldest record");
         TEST_ASSERT (rec != nullptr && rec->sequence == 1, "Oldest record is sequence 1");
         TEST_ASSERT (rec->student_id == 101, "Record student_id matches");
 
-        // Acknowledge sequence 1
+        // ACK sequence 1 and check that ring buffer head advances
         TEST_ASSERT (wal.acknowledge (1), "wal.acknowledge(1) succeeds");
         TEST_ASSERT (wal.acknowledged_sequence () == 1, "Acknowledged sequence is 1");
         TEST_ASSERT (wal.pending_count () == 1, "Pending count reduced to 1");
 
-        // Peek next is now sequence 2
+        // Head should now point to sequence 2
         TEST_ASSERT (wal.peek_next (rec), "wal.peek_next returns next pending");
         TEST_ASSERT (rec != nullptr && rec->sequence == 2, "Next record is sequence 2");
 
         wal.close ();
     }
 
-    // Reopen verification
+    // Reopen and ensure unacknowledged records survive crash
     {
         core::Arena arena_reopen (1024 * 1024);
         sync_engine::WriteAheadLog wal_reopened (arena_reopen);
@@ -939,7 +930,7 @@ static void test_c_api_merkle_dag () {
     std::remove (wal_path);
     std::remove (dag_path);
 
-    // 1. Create engine with persistent backing files
+    // Boot engine bound to persistent WAL and DAG backing files
     EduRouteEngine *engine = eduroute_create (50, 10, wal_path);
     TEST_ASSERT (engine != nullptr, "eduroute_create with WAL/DAG file path succeeded");
     TEST_ASSERT (eduroute_get_dag_node_count (engine) == 0, "Initial DAG node count is 0");
@@ -948,7 +939,7 @@ static void test_c_api_merkle_dag () {
     eduroute_register_question (engine, 1, 0, 1000.0f, 15000, 2);
     eduroute_register_question (engine, 2, 0, 1200.0f, 20000, 0);
 
-    // 2. Ingest MCQ submission
+    // Ingest student MCQ submission
     core::u8 wire_buf[512];
     core::usize sz1      = eduroute_build_wire_packet (engine, 5, 1, 0 /* MCQ */, 2 /* option C */, 3000, nullptr, 0,
                                                        wire_buf, sizeof (wire_buf));
@@ -956,7 +947,7 @@ static void test_c_api_merkle_dag () {
     TEST_ASSERT (res1.status_code == 0, "MCQ packet ingest succeeded");
     TEST_ASSERT (eduroute_get_dag_node_count (engine) == 1, "DAG node count incremented to 1");
 
-    // Verify latest DAG state for (student 5, question 1)
+    // Inspect latest DAG state for (student 5, question 1)
     uint64_t parent_h = 0, node_h = 0;
     char ans_buf[256]{};
     size_t ans_len = 0;
@@ -965,7 +956,7 @@ static void test_c_api_merkle_dag () {
     TEST_ASSERT (ans_len == 1, "MCQ answer length is 1");
     TEST_ASSERT (ans_buf[0] == 'C', "MCQ answer option is 'C'");
 
-    // 3. Ingest descriptive text submission
+    // Ingest first revision of a descriptive answer
     const char *text_v1 = "Binary search tree has O(log n) search time on average";
     core::usize sz2 =
             eduroute_build_wire_packet (engine, 5, 2, 1 /* TextDelta */, 0xFF, 6000, text_v1,
@@ -974,7 +965,7 @@ static void test_c_api_merkle_dag () {
     TEST_ASSERT (eduroute_get_dag_node_count (engine) == 2, "DAG node count incremented to 2");
     TEST_ASSERT (eduroute_get_dag_history_size (engine, 5, 2) == 1, "History size for (5, 2) is 1");
 
-    // 4. Ingest revision on question 2
+    // Student edits answer to add balancing details
     const char *text_v2 = "Binary search tree with self-balancing guarantees O(log n) worst case";
     core::usize sz3 =
             eduroute_build_wire_packet (engine, 5, 2, 1 /* TextDelta */, 0xFF, 11000, text_v2,
@@ -983,13 +974,13 @@ static void test_c_api_merkle_dag () {
     TEST_ASSERT (eduroute_get_dag_node_count (engine) == 3, "DAG node count incremented to 3");
     TEST_ASSERT (eduroute_get_dag_history_size (engine, 5, 2) == 2, "History size for (5, 2) updated to 2");
 
-    // Verify latest text is text_v2
+    // DAG head should now yield revision v2
     ok = eduroute_get_dag_latest (engine, 5, 2, &parent_h, &node_h, ans_buf, sizeof (ans_buf), &ans_len);
     TEST_ASSERT (ok == 1, "eduroute_get_dag_latest returns true for revised text");
     TEST_ASSERT (ans_len == std::strlen (text_v2), "Revised answer length matches");
     TEST_ASSERT (std::memcmp (ans_buf, text_v2, ans_len) == 0, "Retrieved latest answer text matches text_v2");
 
-    // 5. Reopen durability test
+    // Tear down and resurrect engine to verify file replay
     eduroute_destroy (engine);
 
     EduRouteEngine *reopened = eduroute_create (50, 10, wal_path);
@@ -1019,17 +1010,17 @@ static void test_c_api_offline_recovery_compression () {
     std::remove (dag_path);
     std::remove (ring_wal_path);
 
-    // 1. Create engine with backing files
+    // Set up test engine backed by temporary files
     EduRouteEngine *engine = eduroute_create (50, 10, wal_path);
     TEST_ASSERT (engine != nullptr, "Engine created with WAL/DAG backing");
     TEST_ASSERT (eduroute_wal_pending_count (engine) == 0, "Initial WAL pending count is 0");
     TEST_ASSERT (eduroute_wal_last_sequence (engine) == 0, "Initial WAL last sequence is 0");
 
-    // Register test questions
+    // Register questions (one objective, one essay)
     eduroute_register_question (engine, 1, 0, 1000.0f, 15000, 2); // Q1 MCQ
     eduroute_register_question (engine, 2, 0, 1200.0f, 20000, 0); // Q2 Descriptive
 
-    // 2. Direct Huffman Delta Compression Verification
+    // Huffman delta compression on incremental typing
     const char *text_draft1 = "Hash tables use open addressing with quadratic probing";
     const char *text_draft2 = "Hash tables use open addressing with quadratic probing to resolve collisions";
 
@@ -1039,13 +1030,13 @@ static void test_c_api_offline_recovery_compression () {
     TEST_ASSERT (bit_len > 0, "Huffman bit length is greater than 0");
     TEST_ASSERT (comp_bytes > 0 && comp_bytes <= orig_sz + 10, "Compressed delta bytes produced");
 
-    // Compressing identical text yields 0 delta bytes
+    // Unchanged draft must yield zero compressed bytes
     size_t no_delta_orig = 0, no_delta_bits = 0;
     size_t no_delta_bytes =
             eduroute_compress_delta (engine, 2, text_draft1, text_draft1, &no_delta_orig, &no_delta_bits);
     TEST_ASSERT (no_delta_bytes == 0, "Compressing identical text yields 0 deltas");
 
-    // 3. Online Connected Ingestion: Student #12 answers Question #1
+    // Normal online submission while network is connected
     EduIngestResult res1 =
             eduroute_ingest_recovered_answer (engine, 12, 1, 0 /* MCQ */, 2 /* option C */, 2000, nullptr, 0, 1000);
     TEST_ASSERT (res1.status_code == 0, "Student 12 MCQ submission ingested");
@@ -1054,34 +1045,33 @@ static void test_c_api_offline_recovery_compression () {
     TEST_ASSERT (eduroute_wal_pending_count (engine) == 0, "0 pending WAL records in connected state");
     TEST_ASSERT (eduroute_get_dag_node_count (engine) == 1, "DAG node count is 1");
 
-    // Check cumulative compression telemetry
+    // Check compression bandwidth savings ratio
     size_t tot_orig = 0, tot_comp = 0, tot_deltas = 0;
     float savings_pct = 0.0f;
     eduroute_get_compression_stats (engine, &tot_orig, &tot_comp, &tot_deltas, &savings_pct);
     TEST_ASSERT (tot_deltas >= 1, "At least 1 delta recorded in telemetry");
 
-    // 4. Simulate Internet Disconnection: Student #12 continues answering while OFFLINE
-    // Draft 1 buffered to disk
+    // Student goes offline due to Wi-Fi dropout; edits get buffered to WAL
     uint64_t seq2  = 0;
     int append_ok2 = eduroute_wal_append_unacked (engine, 12, 2, 2500, "", text_draft1, &seq2);
     TEST_ASSERT (append_ok2 == 1, "Offline unacked draft 1 appended to disk WAL");
     TEST_ASSERT (seq2 == 2, "Sequence 2 assigned to offline draft 1");
 
-    // Revision 2 buffered to disk
+    // Second offline edit queued locally
     uint64_t seq3  = 0;
     int append_ok3 = eduroute_wal_append_unacked (engine, 12, 2, 4500, text_draft1, text_draft2, &seq3);
     TEST_ASSERT (append_ok3 == 1, "Offline unacked revision 2 appended to disk WAL");
     TEST_ASSERT (seq3 == 3, "Sequence 3 assigned to offline revision 2");
 
-    // Verify uncommitted state pending on disk
+    // Two unacknowledged entries should be sitting in WAL ring buffer
     TEST_ASSERT (eduroute_wal_pending_count (engine) == 2, "WAL pending count is 2 unacknowledged records");
     TEST_ASSERT (eduroute_wal_last_sequence (engine) == 3, "WAL last sequence is 3");
     TEST_ASSERT (eduroute_wal_acknowledged_sequence (engine) == 1, "WAL acknowledged sequence remains 1");
 
-    // 5. Simulate System Crash / Power Loss while Disconnected
-    eduroute_destroy (engine); // Memory wiped completely!
+    // Sudden power cut / process termination while offline
+    eduroute_destroy (engine);
 
-    // 6. System Reboots & Reconnects: Recover Data from Disk
+    // Engine boots back up after machine restarts
     EduRouteEngine *recovered_eng = eduroute_create (50, 10, wal_path);
     TEST_ASSERT (recovered_eng != nullptr, "Reopened EduRouteEngine from disk files");
     TEST_ASSERT (eduroute_wal_pending_count (recovered_eng) == 2,
@@ -1089,7 +1079,7 @@ static void test_c_api_offline_recovery_compression () {
     TEST_ASSERT (eduroute_wal_last_sequence (recovered_eng) == 3, "Recovered last sequence is 3");
     TEST_ASSERT (eduroute_wal_acknowledged_sequence (recovered_eng) == 1, "Recovered acknowledged sequence is 1");
 
-    // Peek oldest unacknowledged record from disk
+    // Verify oldest pending unacked record metadata
     uint64_t rec_seq = 0, rec_ts = 0;
     uint32_t rec_sid = 0;
     size_t rec_orig = 0, rec_comp_b = 0, rec_deltas = 0;
@@ -1100,7 +1090,7 @@ static void test_c_api_offline_recovery_compression () {
     TEST_ASSERT (rec_sid == 12, "Unacknowledged record belongs to student 12");
     TEST_ASSERT (rec_deltas == 1, "Unacknowledged record contains 1 compressed delta");
 
-    // Recover and decompress sequence 2 from disk
+    // Decompress and replay seq 2 onto server state
     char rec_buf[512]{};
     size_t rec_len  = 0;
     int recover_ok1 = eduroute_wal_recover_and_apply_next (recovered_eng, &rec_seq, &rec_sid, rec_buf, sizeof (rec_buf),
@@ -1113,7 +1103,7 @@ static void test_c_api_offline_recovery_compression () {
     TEST_ASSERT (eduroute_wal_pending_count (recovered_eng) == 1, "Pending count decreased to 1");
     TEST_ASSERT (eduroute_wal_acknowledged_sequence (recovered_eng) == 2, "Acknowledged sequence advanced to 2");
 
-    // Recover and decompress sequence 3 (revision 2) from disk
+    // Decompress and replay seq 3 (revision) onto server state
     int recover_ok2 = eduroute_wal_recover_and_apply_next (recovered_eng, &rec_seq, &rec_sid, rec_buf, sizeof (rec_buf),
                                                            &rec_len);
     TEST_ASSERT (recover_ok2 == 1, "Recovered sequence 3 from disk");
@@ -1140,7 +1130,7 @@ int main () {
     std::printf ("       EduRoute Engine Extensive Unit Test Suite    \n");
     std::printf ("===============================================================\n\n");
 
-    // Suite 1: Core Primitives
+    // Division 0 / Core Primitives
     test_core_arena ();
     test_core_dyn_array ();
     test_core_hash_map ();
@@ -1148,22 +1138,22 @@ int main () {
     test_core_string_view ();
     test_core_bit_stream ();
 
-    // Suite 2: Division 2 Anti-Cheat
+    // Division 2 / Anti-Cheat
     test_anticheat_kmer_winnow ();
     test_anticheat_anomaly_stats ();
     test_anticheat_collusion_graph ();
 
-    // Suite 3: Division 3 Adaptive Rank
+    // Division 3 / Adaptive Ranking
     test_rank_fenwick_score ();
     test_rank_order_stat_avl ();
     test_rank_irt_selector ();
 
-    // Suite 4: Division 1 Sync Engine
+    // Division 1 / Sync Engine
     test_sync_merkle_dag ();
     test_sync_huffman_delta ();
     test_sync_wal_ring ();
 
-    // Suite 5: C ABI & Pipeline Integration
+    // C ABI & Integration
     test_c_api_integration ();
     test_c_api_merkle_dag ();
     test_c_api_offline_recovery_compression ();

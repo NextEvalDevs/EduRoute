@@ -5,29 +5,10 @@
 
 namespace core::adaptive_rank {
 
-    /**
-     * OrderStatAvl - exact leaderboard. A self-balancing binary search tree (AVL) in which every
-     * node also remembers how many nodes are in its subtree. That gives, all in O(log n):
-     *
-     *      insert / erase / update      a student's result appears, disappears or changes
-     *      rank_of(key)                 exact position of a student (1 = best)
-     *      select(k)                    "who is 5th?"
-     *      top_k(k, out)                the podium
-     *
-     * Keys are core::LeaderboardKey. Their operator< already means "better first":
-     * higher scaled_score, then lower total_time_ms, then lower student_id. Because student_id
-     * is the last tie-breaker, no two different students ever compare equal.
-     *
-     * Memory: ONE fixed pool of nodes taken from the arena in init(). Erased nodes go on a
-     * free-list and are reused, so insert/erase forever never touches the arena again.
-     *
-     * Status codes:
-     *    Ok                   success
-     *    InvalidState         used before init(), capacity 0, or null output pointer
-     *    OutOfMemory          arena too small in init(), or tree already holds `capacity` keys
-     *    DuplicateSubmission  insert() of a key that is already present
-     *    KeyNotFound          erase()/update()/rank_of() of a key that is not present, select() out of range
-     */
+    // Order-Statistic AVL Tree for real-time tie-broken leaderboard management.
+    // Each node maintains subtree node counts for O(log n) rank lookups and select(k) queries.
+    // Keys sort by score desc -> elapsed time asc -> student ID asc.
+    // Node pool is pre-allocated in arena memory; erased nodes recycle via an internal free-list.
     class OrderStatAvl {
         public:
             OrderStatAvl ()                                = default;

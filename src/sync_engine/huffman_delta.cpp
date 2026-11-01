@@ -33,7 +33,7 @@ namespace sync_engine {
                 bool valid;
         };
 
-        // Store integers in a fixed big-endian format so the byte layout is consistent
+        // BE 32-bit int serializer
         void write_u32 (core::Array<core::u8> &out, core::u32 value) {
             out.push_back (static_cast<core::u8> (value >> 24));
             out.push_back (static_cast<core::u8> (value >> 16));
@@ -41,7 +41,7 @@ namespace sync_engine {
             out.push_back (static_cast<core::u8> (value));
         }
 
-        // Read one serialized integer and stop if the input does not contain four bytes
+        // 4 bytes big-endian; false if we don't have enough bytes left
         bool read_u32 (const core::Array<core::u8> &in, core::usize &pos, core::u32 &value) {
             if (pos > in.size () || in.size () - pos < 4) return false;
 
@@ -51,7 +51,7 @@ namespace sync_engine {
             return true;
         }
 
-        // The heap always keeps the lowest-frequency node at the top
+        // Min-heap for Huffman tree construction
         class MinHeap {
                 HuffmanNode *nodes_[256];
                 core::usize count_;
@@ -114,7 +114,7 @@ namespace sync_engine {
                 }
         };
 
-        // Count how often each byte appears in the serialized delta data.
+        // Byte frequency histogram over the serialized delta buffer
         void count_frequencies (FrequencyMap &frequencies, const core::u8 *data, core::usize length) {
             for (core::usize i = 0; i < length; ++i) {
                 core::u32 &f = frequencies[data[i]];
@@ -122,7 +122,7 @@ namespace sync_engine {
             }
         }
 
-        // Repeatedly combine the two least frequent nodes to build the Huffman tree
+        // Huffman tree construction
         HuffmanNode *build_tree (core::Arena &arena, const FrequencyMap &frequencies) {
             MinHeap heap;
 
@@ -168,13 +168,12 @@ namespace sync_engine {
             return heap.pop ();
         }
 
-        // Codes are stored in a 64-bit value, so longer paths are rejected
-        // Walk the tree to assign a bit sequence to each byte
+        // DFS tree traversal to generate variable-length bit codes (capped at 63 bits)
         void make_codes (const HuffmanNode *node, core::u64 bits, core::u32 length, CodeMap &codes, bool &valid) {
             if (!node || !valid) return;
 
             if (node->is_leaf ()) {
-                // Give a single-symbol input a one-bit code so it can be encoded normally
+                // Single-symbol edge case: assign a 1-bit code so we can still encode it
                 codes[node->byte] = {bits, length == 0 ? 1U : length};
                 return;
             }
@@ -188,7 +187,7 @@ namespace sync_engine {
             make_codes (node->right, (bits << 1) | 1ULL, length + 1, codes, valid);
         }
 
-        // Pack each byte code into the output, most significant bit first
+        // Pack variable-length bit codes into output byte array (MSB first)
         EncodedBits encode (core::Arena &arena, const core::u8 *input, core::usize length, const CodeMap &codes) {
             EncodedBits result{core::Array<core::u8> (arena), 0, false};
 
@@ -221,7 +220,7 @@ namespace sync_engine {
             return result;
         }
 
-        // Follow the Huffman tree one bit at a time and rebuild the original bytes
+        // Bitstream decoder: walks the Huffman tree from root to leaf for each bit
         core::Array<core::u8> decode (core::Arena &arena, const EncodedBits &encoded, const HuffmanNode *root,
                                       core::usize original_size) {
             core::Array<core::u8> output (arena);
@@ -277,9 +276,9 @@ namespace sync_engine {
         if (!same_text (old_value, new_value)) deltas.push_back ({answer_id, old_value, new_value});
     }
 
-    // Write each delta as answer ID, old text length and data, then new text length and data
+    // Serializes text delta structs into raw binary buffer: [ans_id, old_len, old_str, new_len, new_str]
     bool serialize_text_delta (const TextDeltaArray &deltas, core::Array<core::u8> &output) {
-        // Validate all string lengths first so serialization does not stop halfway through
+        // Quick pre-check on string lengths to avoid aborting halfway through
         for (core::usize i = 0; i < deltas.size (); ++i) {
             if (deltas[i].old_value.size () > std::numeric_limits<core::u32>::max () ||
                 deltas[i].new_value.size () > std::numeric_limits<core::u32>::max ())
@@ -304,7 +303,7 @@ namespace sync_engine {
         return true;
     }
 
-    // Serialize the deltas first; Huffman compression is applied to that byte stream
+    // 1. Serialize deltas -> 2. Count byte frequencies -> 3. Build tree & encode
     CompressedTextDelta compress_text_delta (core::Arena &arena, const TextDeltaArray &deltas) {
         CompressedTextDelta result{
                 core::Array<core::u8> (arena), core::Array<core::u32> (arena), 0, 0, deltas.size (), false};
@@ -348,7 +347,7 @@ namespace sync_engine {
         return result;
     }
 
-    // Rebuild the Huffman tree from the saved frequencies, then decode the byte stream
+    // Decompress Huffman stream and reconstruct the array of TextDelta structs
     TextDeltaArray decompress_text_delta (core::Arena &arena, const CompressedTextDelta &compressed,
                                           core::Array<core::u8> &text_storage) {
         TextDeltaArray result (arena);
@@ -395,7 +394,7 @@ namespace sync_engine {
         core::Array<ParsedDelta> parsed (arena);
         core::usize pos = 0;
 
-        // Validate every delta and its boundaries before creating any StringViews
+        // Parse delta headers and check offsets stay within decoded payload
         for (core::usize i = 0; i < compressed.delta_count; ++i) {
             core::u32 id = 0, old_len = 0, new_len = 0;
 
@@ -418,7 +417,7 @@ namespace sync_engine {
 
         if (pos != raw.size ()) return TextDeltaArray (arena);
 
-        // Store the decoded strings in caller-owned memory; the returned views point here
+        // Copy strings into caller's buffer so the returned StringViews remain valid
         core::usize start = text_storage.size ();
 
         for (core::usize i = 0; i < parsed.size (); ++i) {
@@ -450,7 +449,7 @@ namespace sync_engine {
         return result;
     }
 
-    // Apply a delta only when the current answer matches the delta's recorded old value
+    // Apply delta only if current_value matches recorded old_value
     bool apply_text_delta (core::StringView current_value, const TextDelta &delta, core::Array<core::u8> &output) {
         if (!same_text (current_value, delta.old_value)) return false;
 

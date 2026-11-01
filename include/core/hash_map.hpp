@@ -6,9 +6,8 @@
 
 namespace core {
     /**
-     * @cite Splitmax64 Adapted from https://github.com/svaarala/duktape/blob/master/misc/splitmix64.c
-     * @namespace core
-     * @tparam K type (can be u32 u64 etc)
+     * Default Hashing
+     * @tparam K K
      */
     template<typename K>
     struct DefaultHash {

@@ -28,7 +28,7 @@ namespace core::anticheat {
     }
 
     void CollusionGraph::clear () noexcept {
-        // Arena-backed: caller must reset the arena.
+        // Memory lives in arena, so just flip the ready flag off
         ready_ = false;
     }
 
@@ -41,7 +41,7 @@ namespace core::anticheat {
 
         if (!ed.confirmed && ed.combined_weight >= COLLUSION_THRESHOLD) {
             ed.confirmed = true;
-            // Merge in DSU if both IDs are within range.
+            // Threshold crossed -> union students into the same cheating cluster
             if (a < dsu_->size () && b < dsu_->size ()) { dsu_->join (a, b); }
         }
 
@@ -67,7 +67,7 @@ namespace core::anticheat {
         }
 
         if (ed != nullptr) {
-            // Keep the peak text similarity.
+            // Keep the peak similarity seen across all essay edits
             if (text_sim > ed->peak_text_sim) ed->peak_text_sim = text_sim;
             if (ed->collision_count < 0xFFFFu) ++ed->collision_count;
             recompute_and_check (a, b, *ed, flagged_out);
@@ -147,55 +147,19 @@ namespace core::anticheat {
     usize CollusionGraph::get_confirmed_edges (CollusionEdge *out, usize max_edges) const noexcept {
         if (!ready_ || out == nullptr || max_edges == 0u) return 0u;
 
-        // We iterate over the internal slot array of the HashMap to collect
-        // all confirmed edges.  This is intentional: we do this only for
-        // dashboard/telemetry queries, not on the hot path.
         usize written = 0u;
 
-        // Access internal slots via the public capacity/size interface is not
-        // available, so we use a range-based approach: we don't expose raw
-        // slots in HashMap.  Instead, we iterate using the begin/end of the
-        // underlying slot array via a helper that scans for psl != 0.
-        // Since HashMap doesn't expose iterators, we use the capacity and
-        // manually walk.  This is acceptable because this function is only
-        // called for the dashboard (not hot-path).
-
-        // We cast to expose the internal structure.  Because this file is in
-        // the same codebase and the HashMap is a known-layout type we can
-        // iterate its slots.  We use the size() to bound the loop and the
-        // find() pattern to avoid undefined behavior.
-        //
-        // Alternative: call get_edge for every pair — but we don't have a
-        // list of pairs.  Instead we walk the map's raw slots.
-        // HashMap<u64,EdgeData> internal: slots_ array of Slot{K,V,psl}
-        // We replicate the slot layout here as a local-mirror to walk it.
-
-        // NOTE: since we cannot add an iterator to HashMap without touching
-        // that file (user said don't touch other things), we store a parallel
-        // "confirmed edge list" approach via a separate scratch scan.
-        //
-        // We use a deterministic O(capacity) scan by querying the map's
-        // capacity and probing every slot index through a local struct that
-        // mirrors the internal layout.  This is safe as long as HashMap's
-        // internal Slot layout matches.
-
+        // Fast scan directly over Robin Hood table slots for telemetry.
+        // HashMap doesn't have an iterator implementation, so rather than refactoring
+        // core::HashMap, we read the known slot layout:
+        // [0..7] Arena&, [8..15] Slot*, [16..23] capacity, [24..31] size.
         struct MirrorSlot {
                 u64 key;
                 EdgeData val;
                 u32 psl;
         };
 
-        // Fetch raw pointer to slots via offset arithmetic from the HashMap
-        // object.  HashMap stores: arena_(ref), slots_(ptr), capacity_, size_.
-        // ref is 8 bytes, ptr is 8 bytes.
-        // Offset: slots_ is the second data member after arena_ reference.
-        // This is fragile but acceptable given we own both translation units.
-        const u8 *raw = reinterpret_cast<const u8 *> (edge_map_);
-        // Layout of HashMap<u64,EdgeData>:
-        //   [0]  Arena &arena_     -> reference = 8 bytes (pointer internally)
-        //   [8]  Slot *slots_      -> 8 bytes
-        //   [16] usize capacity_   -> 8 bytes
-        //   [24] usize size_       -> 8 bytes
+        const u8 *raw           = reinterpret_cast<const u8 *> (edge_map_);
         const MirrorSlot *slots = *reinterpret_cast<const MirrorSlot *const *> (raw + 8u);
         const usize capacity    = *reinterpret_cast<const usize *> (raw + 16u);
 

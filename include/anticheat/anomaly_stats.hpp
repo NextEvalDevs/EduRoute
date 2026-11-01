@@ -7,28 +7,11 @@
 
 namespace core::anticheat {
 
-    /**
-     * AnomalyStats - Statistical anomaly detection for anti-cheat.
-     *
-     * Tracks two signals per (StudentId, QuestionId) pair:
-     *
-     *   1. TIME-SYNC SPIKE: Two students' Δt values are suspiciously close.
-     *      If |Δt_A - Δt_B| <= TIME_SYNC_THRESHOLD_MS, time_score increments.
-     *
-     *   2. SHARED RARE ERROR: Students select the same WRONG MCQ option on a
-     *      question where that option is rarely chosen (< RARE_ERROR_FREQ_THRESHOLD).
-     *      err_score increments for the pair.
-     *
-     * Both signals are accumulated into per-pair weights fed to CollusionGraph.
-     *
-     * Memory: all storage lives in the Arena supplied at construction.
-     *         No individual frees ever occur.
-     *
-     * Status codes used:
-     *    Ok            success / flag raised
-     *    KeyNotFound   query for a pair that has no record yet
-     *    InvalidState  used before init() or capacity overflow
-     */
+    // Statistical anomaly detector for exam anti-cheat.
+    // Detects two primary behavioral anomalies between student pairs:
+    //   1. Submissions completed within an impossibly tight delta-t window
+    //   2. Identical wrong answers on rare distractor options
+    // Suspicion scores accumulate into pair weights for the collusion graph.
     struct StatAnomalyMatch {
             StudentId other_student; // the peer being compared against
             f32 time_score;          // accumulated Δt-sync suspicion [0, ∞)

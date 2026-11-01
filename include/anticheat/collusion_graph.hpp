@@ -8,27 +8,13 @@
 
 namespace core::anticheat {
 
-    /**
-     * CollusionGraph - weighted undirected graph for cheating-cluster detection.
-     *
-     * Each edge (A, B) accumulates three independent suspicion signals:
-     *   - text_sim    : peak cosine/Jaccard similarity from KmerWinnow         [0,1]
-     *   - time_score  : accumulated time-sync spike hits from AnomalyStats     [0,∞)
-     *   - err_score   : accumulated shared-rare-error hits from AnomalyStats   [0,∞)
-     *
-     * A combined weight W(A,B) is computed as a weighted sum of these three.
-     * When W(A,B) >= COLLUSION_THRESHOLD the edge is "confirmed" and the two
-     * students are merged into the same DSU component (cheating cluster).
-     *
-     * Memory: all nodes and the edge hash-map live in the arena supplied at init().
-     *         No individual frees occur. The DSU is re-sized once at init().
-     *
-     * Status codes:
-     *    Ok                   success
-     *    InvalidState         used before init() or bad arguments
-     *    OutOfMemory          arena too small
-     *    DuplicateSubmission  update_edge called with identical (a,b) order after flipping
-     */
+    // Collusion graph tracking pair-wise cheating suspicion across students.
+    // Edge weight W(A, B) linearly combines three indicators:
+    //   1. text_sim: highest winnowed k-mer Jaccard similarity
+    //   2. time_score: timestamp proximity on submissions
+    //   3. err_score: shared identical incorrect answers
+    // When W(A, B) exceeds COLLUSION_THRESHOLD, the edge is confirmed and
+    // the student pair is joined in the Disjoint Set Union (DSU) cheating ring.
     struct CollusionEdge {
             StudentId a;
             StudentId b;

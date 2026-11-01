@@ -1,6 +1,9 @@
 """
 EduRoute C-ABI ctypes Bridge
-Strictly interfaces with libeduroute.so via extern "C" ABI defined in include/eduroute_c_api.h
+
+Thin Python wrapper around libeduroute.so via extern "C" ABI bindings.
+Handles binary packet encoding, FFI struct conversion, and memory-safe
+interfacing between the Flask web layer and the zero-heap C++ engine.
 """
 
 import os
@@ -9,9 +12,7 @@ import ctypes
 import threading
 from typing import List, Dict, Optional, Tuple
 
-# -----------------------------------------------------------------------------
-# 1. Load C-ABI Shared Library (with automatic ASan detection)
-# -----------------------------------------------------------------------------
+# Locate compiled C++ engine shared library
 def _find_lib_path() -> str:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
@@ -27,7 +28,8 @@ def _find_lib_path() -> str:
 
 _lib_path = _find_lib_path()
 
-# If libeduroute.so was compiled with ASan (Debug mode), pre-load libasan.so to avoid crash
+# In debug builds with ASan enabled, Python's dlopen will crash unless libasan
+# is already loaded in the process address space. Re-exec with LD_PRELOAD if needed.
 if "libasan" not in os.environ.get("LD_PRELOAD", ""):
     try:
         with open(_lib_path, "rb") as _f:
@@ -46,9 +48,10 @@ if "libasan" not in os.environ.get("LD_PRELOAD", ""):
 _lib = ctypes.CDLL(_lib_path)
 
 # -----------------------------------------------------------------------------
-# 2. C-ABI ctypes Structures (Packed & Aligned exactly to C definitions)
+# Binary struct definitions matching include/eduroute_c_api.h
 # -----------------------------------------------------------------------------
-# #pragma pack(push, 1) - 32 Bytes
+
+# Wire protocol header (32 bytes packed, matching pragma pack(push, 1))
 class EduWireHeader(ctypes.Structure):
     _pack_ = 1
     _fields_ = [
@@ -63,7 +66,7 @@ class EduWireHeader(ctypes.Structure):
         ("mac_tag16", ctypes.c_uint16),
     ]
 
-# 24 Bytes Synchronous Response
+# Ingestion response payload (24 bytes)
 class EduIngestResult(ctypes.Structure):
     _fields_ = [
         ("status_code", ctypes.c_uint8),       # 0 = Ok
@@ -76,7 +79,7 @@ class EduIngestResult(ctypes.Structure):
         ("cluster_root_id", ctypes.c_uint32),  # DSU root ID
     ]
 
-# Export Struct for Flask Leaderboard (28 Bytes)
+# Leaderboard snapshot row for live UI polling (28 bytes)
 class EduLeaderboardRow(ctypes.Structure):
     _fields_ = [
         ("rank", ctypes.c_uint32),
@@ -88,7 +91,7 @@ class EduLeaderboardRow(ctypes.Structure):
         ("is_flagged", ctypes.c_uint8),
     ]
 
-# Export Struct for Flask Collusion Graph (32 Bytes)
+# Anti-cheat collusion edge for graph rendering (32 bytes)
 class EduCollusionEdge(ctypes.Structure):
     _fields_ = [
         ("student_a", ctypes.c_uint32),
@@ -102,7 +105,7 @@ class EduCollusionEdge(ctypes.Structure):
     ]
 
 # -----------------------------------------------------------------------------
-# 3. Bind Function Prototypes
+# Function prototypes exported by libeduroute.so
 # -----------------------------------------------------------------------------
 # EduRouteEngine *eduroute_create (uint32_t max_students, uint32_t max_questions, const char *wal_filepath);
 _lib.eduroute_create.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_char_p]
@@ -170,7 +173,7 @@ _lib.eduroute_get_dag_latest.restype = ctypes.c_int
 _lib.eduroute_get_dag_history_size.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint16]
 _lib.eduroute_get_dag_history_size.restype = ctypes.c_size_t
 
-# --- Division 1: WAL, Recovery & Huffman Delta Compression C-ABI Bindings ---
+# WAL and Huffman delta sync bindings
 # size_t eduroute_wal_pending_count (const EduRouteEngine *engine);
 _lib.eduroute_wal_pending_count.argtypes = [ctypes.c_void_p]
 _lib.eduroute_wal_pending_count.restype = ctypes.c_size_t
@@ -231,10 +234,10 @@ _lib.eduroute_ingest_recovered_answer.argtypes = [
 _lib.eduroute_ingest_recovered_answer.restype = EduIngestResult
 
 # -----------------------------------------------------------------------------
-# 4. EduRouteBridge Wrapper Class
+# High-Level Python Wrapper
 # -----------------------------------------------------------------------------
 class EduRouteBridge:
-    """Thread-safe high-level wrapper over EduRoute C++ engine ABI."""
+    """Python bridge to EduRoute engine with thread-safe lock synchronization."""
 
     ACTION_MCQ = 0
     ACTION_TEXT_DELTA = 1

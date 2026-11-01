@@ -46,10 +46,10 @@ namespace core {
      *     auto checkpoint = arena.get_marker();
      *     // ... allocate things ...
      *     arena.reset_to_marker(checkpoint); // rolls back to checkpoint
+     *     // PLEASE DONT DO free();
      *
-     *  5. Nuclear Reset:
-     *     arena.reset(); // drops entire buffer usage to 0
-     *  6. Check for size while Creating, it DOES NOT reallocate dynamically
+     *  5.  arena.reset(); // drops entire buffer usage to 0
+     *  6. Check for size while Creating, it DOES NOT reallocate dynamically. calculate beforehand
      * ============================================================================
      */
     class Arena {
@@ -85,19 +85,11 @@ namespace core {
                 other.offset_   = 0;
             }
 
-            /**
-             * Use this for raw bytes
-             * @param size Size in bytes
-             * @param alignment Alignment (ignore if u don't know)
-             * @return pointer to the bytes
-             */
+            // Raw bytes allocation with power-of-two alignment
             // void *allocate (std::size_t size, std::size_t alignment = alignof (std::max_align_t));
 
-            /**
-             * Enforces trivial destruyction (int float etc)
-             * @tparam T Type
-             * @return Pointer to the type obhects
-             */
+            // Placement new into arena buffer. T must be trivially destructible
+            // since reset/rollback will NOT call any destructors!
             template<typename T, typename... Args>
             T *create (Args &&...args) {
                 static_assert (std::is_trivially_destructible_v<T>,
