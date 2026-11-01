@@ -17,10 +17,10 @@
 #include "core/types.hpp"
 #include "eduroute_c_api.h"
 
-// Simple LCG pseudo-random generator (reproducible, zero STL)
+// Simple LCG pseudo-random generator (reproducible)
 struct SimpleRng {
         core::u64 state;
-        explicit SimpleRng (core::u64 seed = 123456789ULL) : state (seed) {}
+        explicit SimpleRng (core::u64 seed = 123356789ULL) : state (seed) {}
         core::u32 next () {
             state = state * 6364136223846793005ULL + 1442695040888963407ULL;
             return static_cast<core::u32> (state >> 32);
@@ -33,7 +33,7 @@ struct SimpleRng {
 
 int main () {
     std::printf ("===============================================================\n");
-    std::printf ("        EduRoute High-Throughput Stress Simulator (No STL)     \n");
+    std::printf ("        EduRoute Stress Simulator     \n");
     std::printf ("===============================================================\n\n");
 
     constexpr core::u32 NUM_STUDENTS  = 120;
@@ -41,8 +41,15 @@ int main () {
 
     SimpleRng rng (42);
 
-    // 1. Create engine
-    EduRouteEngine *engine = eduroute_create (NUM_STUDENTS, NUM_QUESTIONS + 5, nullptr);
+    const char *stress_wal_path = "/tmp/test_eduroute_stress_wal.bin";
+    const char *stress_dag_path = "/tmp/test_eduroute_stress_wal.bin.dag";
+    const char *stress_ring_wal = "/tmp/test_eduroute_stress_wal.bin.wal";
+    std::remove (stress_wal_path);
+    std::remove (stress_dag_path);
+    std::remove (stress_ring_wal);
+
+    // 1. Create engine with WAL & Merkle DAG disk persistence
+    EduRouteEngine *engine = eduroute_create (NUM_STUDENTS, NUM_QUESTIONS + 5, stress_wal_path);
     if (!engine) {
         std::printf ("[FATAL] Failed to create EduRouteEngine.\n");
         return 1;
@@ -181,15 +188,58 @@ int main () {
     if (ring2_found) std::printf ("  [PASS] Cheating Ring 2 (Students 20, 21, 22) detected!\n");
     if (ring3_found) std::printf ("  [PASS] Cheating Ring 3 (Students 30 & 31) detected!\n");
 
-    // 7. Arena Memory Efficiency Check
+    // 7. Sync Engine, Huffman Compression & WAL Persistence Telemetry
+    size_t orig_b = 0, comp_b = 0, deltas_c = 0;
+    float savings_pct = 0.0f;
+    eduroute_get_compression_stats (engine, &orig_b, &comp_b, &deltas_c, &savings_pct);
+
+    size_t total_dag_nodes = eduroute_get_dag_node_count (engine);
+    uint64_t wal_last_seq  = eduroute_wal_last_sequence (engine);
+    uint64_t wal_acked_seq = eduroute_wal_acknowledged_sequence (engine);
+    size_t wal_pending     = eduroute_wal_pending_count (engine);
+
+    std::printf ("\n[SYNC ENGINE & HUFFMAN COMPRESSION TELEMETRY]\n");
+    std::printf ("  Total Deltas Compressed : %zu deltas\n", deltas_c);
+    std::printf ("  Original Payload Size   : %zu bytes\n", orig_b);
+    std::printf ("  Huffman Compressed Size : %zu bytes\n", comp_b);
+    std::printf ("  Bandwidth Savings       : %.2f%%\n", savings_pct);
+    std::printf ("  Merkle DAG Nodes Logged : %zu nodes\n", total_dag_nodes);
+    std::printf ("  WAL Records Persisted   : %llu (Acked: %llu, Pending: %zu)\n",
+                 static_cast<unsigned long long> (wal_last_seq), static_cast<unsigned long long> (wal_acked_seq),
+                 wal_pending);
+
+    // 8. Arena Memory Efficiency Check
     core::usize arena_used = eduroute_get_arena_Memory_used (engine);
     std::printf ("\n[MEMORY FOOTPRINT]\n");
     std::printf ("  Persistent + Scratch Memory Used: %zu bytes (%.2f KB)\n", arena_used,
                  static_cast<double> (arena_used) / 1024.0);
 
     eduroute_destroy (engine);
+
+    // 9. Reboot & On-Disk Recovery Check
+    EduRouteEngine *rebooted = eduroute_create (NUM_STUDENTS, NUM_QUESTIONS + 5, stress_wal_path);
+    bool recovery_ok         = (rebooted != nullptr);
+    if (recovery_ok) {
+        size_t recovered_nodes = eduroute_get_dag_node_count (rebooted);
+        uint64_t rec_wal_seq   = eduroute_wal_last_sequence (rebooted);
+        std::printf ("\n[ON-DISK RECOVERY CHECK (POST-REBOOT)]\n");
+        std::printf ("  Recovered DAG Nodes from Disk : %zu / %zu\n", recovered_nodes, total_dag_nodes);
+        std::printf ("  Recovered WAL Seq from Disk   : %llu / %llu\n", static_cast<unsigned long long> (rec_wal_seq),
+                     static_cast<unsigned long long> (wal_last_seq));
+        if (recovered_nodes == total_dag_nodes && rec_wal_seq == wal_last_seq) {
+            std::printf ("  [PASS] 100%% of engine state successfully recovered from disk!\n");
+        } else {
+            recovery_ok = false;
+        }
+        eduroute_destroy (rebooted);
+    }
+
+    std::remove (stress_wal_path);
+    std::remove (stress_dag_path);
+    std::remove (stress_ring_wal);
+
     std::printf ("\n[SHUTDOWN] Engine destroyed cleanly with zero memory leaks.\n");
     std::printf ("===============================================================\n");
 
-    return (ordering_valid && ring1_found && ring2_found && ring3_found) ? 0 : 1;
+    return (ordering_valid && ring1_found && ring2_found && ring3_found && recovery_ok) ? 0 : 1;
 }

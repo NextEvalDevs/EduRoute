@@ -7,4 +7,5 @@
 /dashboard/libeduroute.so
 /dashboard/eduroute_wal.bin
 /dashboard/eduroute_wal.bin.dag
+/dashboard/eduroute_wal.bin.wal
 **/__pycache__/

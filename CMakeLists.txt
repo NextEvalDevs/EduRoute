@@ -35,7 +35,7 @@ file(GLOB_RECURSE ALL_CXX_SOURCE_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/sim/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp"
 )
 
 if(CLANG_FORMAT_EXE)
@@ -55,7 +55,7 @@ if(CLANG_TIDY_EXE)
     file(GLOB_RECURSE ALL_IMPL_FILES
             CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/sim/*.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp"
     )
     add_custom_target(tidy
             COMMAND ${CLANG_TIDY_EXE} -p=${CMAKE_BINARY_DIR}${ALL_IMPL_FILES}
@@ -99,14 +99,14 @@ set_target_properties(eduroute PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dashboard"
 )
 
-add_executable(stress_sim sim/stress_sim.cpp
+add_executable(stress_sim test/stress_sim.cpp
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
         include/eduroute_c_api.h
         include/anticheat/collusion_graph.hpp)
 target_link_libraries(stress_sim PRIVATE eduroute_engine)
 
-add_executable(test_adts sim/test_adts.cpp
+add_executable(test_adts test/test_adts.cpp
         include/anticheat/kmer_winnow.hpp
         include/core/dsu.hpp
         include/eduroute_c_api.h

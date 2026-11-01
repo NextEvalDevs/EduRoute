@@ -5,7 +5,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$DIR"
 
 # Pick python with flask installed
-if [ -f "/home/raj/miniconda3/bin/python" ]; then
+if [ -f "/home/raj/allcodes/lcdashboard/.venv/bin/python" ]; then
+    PYTHON="/home/raj/allcodes/lcdashboard/.venv/bin/python"
+elif [ -f "/home/raj/allcodes/eremopqc/.venv/bin/python" ]; then
+    PYTHON="/home/raj/allcodes/eremopqc/.venv/bin/python"
+elif [ -f "/home/raj/miniconda3/bin/python" ]; then
     PYTHON="/home/raj/miniconda3/bin/python"
 elif which python3 >/dev/null 2>&1; then
     PYTHON="python3"

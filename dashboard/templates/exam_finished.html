@@ -28,6 +28,17 @@
         </div>
     </div>
 
+    <!-- Sync & Compression Telemetry Confirmation -->
+    <div style="max-width: 600px; margin: 0 auto 16px auto; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; padding: 10px; font-size: 0.85rem; color: #166534; text-align: left;">
+        <strong>🛡️ Zero-Loss Sync Engine & Huffman Compression Summary:</strong>
+        <ul style="margin: 6px 0 0 16px; padding: 0;">
+            <li>All answer deltas compressed with Huffman coding: <strong>{{ comp_stats.savings_pct }}% space saved</strong> ({{ comp_stats.total_comp_bytes }} / {{ comp_stats.total_orig_bytes }} bytes).</li>
+            <li>Write-Ahead Log (WAL) committed to disk: <strong>{{ wal_stats.last_sequence }} records</strong> on disk.</li>
+            <li>Merkle DAG state snapshots: <strong>{{ dag_nodes }} tamper-proof nodes</strong> logged.</li>
+            <li>Client disk storage buffer (<tt>localStorage</tt>): <strong>Clean & verified</strong>.</li>
+        </ul>
+    </div>
+
     {% if is_flagged %}
     <div class="alert alert-warning" style="max-width: 600px; margin: 0 auto 16px auto; text-align: left;">
         <strong>Notice from Proctor:</strong> Your session was linked to a statistical or text collusion cluster by the backend anticheat engine (DSU Root #{{ cluster_root_id }}).

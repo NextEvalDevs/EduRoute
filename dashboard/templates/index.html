@@ -20,6 +20,14 @@
             <div class="stat-lbl">Active Students</div>
         </div>
         <div class="stat-box">
+            <div class="stat-val" style="color: #0f766e;">{{ comp_stats.savings_pct }}%</div>
+            <div class="stat-lbl">Huffman Savings</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-val">{{ wal_stats.last_sequence }}</div>
+            <div class="stat-lbl">WAL Disk Seq</div>
+        </div>
+        <div class="stat-box">
             <div class="stat-val">{{ confirmed_edges|length }}</div>
             <div class="stat-lbl">Collusion Flags</div>
         </div>
@@ -74,8 +82,8 @@
         <tbody>
             <tr>
                 <td><strong>Div 1: Sync & WAL</strong></td>
-                <td>Append-Only Binary WAL Ring + FNV-1a Hash Chain</td>
-                <td><span class="badge badge-green">Active (Zero-Loss)</span></td>
+                <td>Append-Only Binary WAL Ring + Merkle DAG + Huffman Delta Compression</td>
+                <td><span class="badge badge-green">Active ({{ comp_stats.savings_pct }}% Saved, Zero-Loss)</span></td>
             </tr>
             <tr>
                 <td><strong>Div 2: Anti-Cheat</strong></td>
